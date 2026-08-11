@@ -353,12 +353,13 @@ def compare_layouts(before: pd.DataFrame, after: pd.DataFrame) -> tuple[pd.DataF
     return pd.DataFrame(table_rows), pd.DataFrame(column_rows)
 
 
-def storage_clause(size_gb: float | None) -> str:
-    if size_gb is None or size_gb <= 0:
+def storage_clause(allocated_bytes: int | None) -> str:
+    if allocated_bytes is None or allocated_bytes <= 0:
         return ""
-    initial_gb = max(1, math.ceil(size_gb))
-    next_gb = max(1, min(initial_gb, 16))
-    return f" STORAGE (INITIAL {initial_gb}G NEXT {next_gb}G)"
+    for divisor, suffix in ((1024**3, "G"), (1024**2, "M"), (1024, "K")):
+        if allocated_bytes % divisor == 0:
+            return f" STORAGE (INITIAL {allocated_bytes // divisor}{suffix})"
+    return f" STORAGE (INITIAL {allocated_bytes})"
 
 
 def clean_metadata_ddl(text: str) -> str:
@@ -367,42 +368,30 @@ def clean_metadata_ddl(text: str) -> str:
     return value[:-1].strip() if value.endswith(";") else value
 
 
-def fetch_current_table_sizes(target_owner: str, target_tables: list[str]) -> dict[str, float]:
+def fetch_current_table_allocations(target_owner: str, target_tables: list[str]) -> dict[str, int]:
     if not target_tables:
         return {}
-    result: dict[str, float] = {}
+    result: dict[str, int] = {}
     for start in range(0, len(target_tables), 900):
         current_tables = target_tables[start : start + 900]
         bind_names = [f"table_{index}" for index in range(len(current_tables))]
         bind_sql = ", ".join(f":{name}" for name in bind_names)
         binds: dict[str, str] = dict(zip(bind_names, current_tables))
         query = f"""
-        SELECT TABLE_NAME, ROUND(SUM(BYTES) / 1024 / 1024 / 1024, 6) AS SIZE_GB
-          FROM (
-                SELECT NVL(L_SEG.TABLE_NAME, NVL(L_IDX.TABLE_NAME,
-                       S.SEGMENT_NAME)) AS TABLE_NAME,
-                       S.BYTES
-                  FROM USER_SEGMENTS S
-                  LEFT JOIN USER_LOBS L_SEG
-                    ON L_SEG.SEGMENT_NAME = S.SEGMENT_NAME
-                  LEFT JOIN USER_LOBS L_IDX
-                    ON L_IDX.INDEX_NAME = S.SEGMENT_NAME
-                 WHERE S.SEGMENT_TYPE IN (
-                       'TABLE', 'TABLE PARTITION', 'TABLE SUBPARTITION',
-                       'LOBSEGMENT', 'LOB PARTITION', 'LOB SUBPARTITION', 'LOBINDEX'
-                   )
-          )
-         WHERE TABLE_NAME IN ({bind_sql})
-         GROUP BY TABLE_NAME
+        SELECT SEGMENT_NAME AS TABLE_NAME, SUM(BYTES) AS ALLOCATED_BYTES
+          FROM USER_SEGMENTS
+         WHERE SEGMENT_TYPE = 'TABLE'
+           AND SEGMENT_NAME IN ({bind_sql})
+         GROUP BY SEGMENT_NAME
     """
         try:
             with get_pool().acquire() as conn:
                 with conn.cursor() as cursor:
                     cursor.execute(query, binds)
-                    result.update({normalized(row[0]): float(row[1]) for row in cursor.fetchall() if row[1] is not None})
+                    result.update({normalized(row[0]): int(row[1]) for row in cursor.fetchall() if row[1] is not None})
         except Exception as exc:
             raise RuntimeError(
-                f"Oracle 현재 세그먼트 크기 조회 실패: USER_SEGMENTS 또는 USER_LOBS 조회 오류입니다. 원본 오류: {exc}"
+                f"Oracle 현재 테이블 할당량 조회 실패: USER_SEGMENTS 조회 오류입니다. 원본 오류: {exc}"
             ) from exc
     return result
 
@@ -469,7 +458,7 @@ def build_table_ddl(
     table_tablespace: str,
     index_tablespace: str,
     character_multiplier: int,
-    initial_size_gb: float | None,
+    initial_size_bytes: int | None,
 ) -> tuple[str, list[str]]:
     used_columns: set[str] = set()
     column_lines: list[str] = []
@@ -485,7 +474,7 @@ def build_table_ddl(
             column_comments.append(f"COMMENT ON COLUMN {target_owner}.{target_table}.{oracle_identifier} IS {q_literal(source_attr)}")
     ddl = f"CREATE TABLE {target_owner}.{target_table} (\n"
     ddl += ",\n".join(column_lines)
-    ddl += f"\n) SEGMENT CREATION IMMEDIATE TABLESPACE {table_tablespace}{storage_clause(initial_size_gb)}"
+    ddl += f"\n) SEGMENT CREATION IMMEDIATE TABLESPACE {table_tablespace}{storage_clause(initial_size_bytes)}"
     table_comment = clean_text(entity)
     comments = ([] if not table_comment else [f"COMMENT ON TABLE {target_owner}.{target_table} IS {q_literal(table_comment)}"]) + column_comments
     return ddl, comments
@@ -508,7 +497,7 @@ def build_ddl_artifact(
         for _, change in table_changes.iterrows()
         if clean_text(change["구분"]) == "변경"
     ]
-    current_sizes = fetch_current_table_sizes(target_owner, sorted(set(existing_tables)))
+    current_allocations = fetch_current_table_allocations(target_owner, sorted(set(existing_tables)))
     with get_pool().acquire() as conn:
         with conn.cursor() as cursor:
             for _, change in table_changes.iterrows():
@@ -540,7 +529,7 @@ def build_ddl_artifact(
                     table_tablespace,
                     index_tablespace,
                     character_multiplier,
-                    current_sizes.get(target_table) if status == "변경" else None,
+                    current_allocations.get(target_table) if status == "변경" else None,
                 )
                 statements.append(DdlStatement("CREATE TABLE", source_owner, source_table, target_table, create_sql))
                 for comment_sql in comment_sqls:
