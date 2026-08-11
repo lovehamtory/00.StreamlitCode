@@ -48,6 +48,8 @@ def init_session_state() -> None:
         "check_ddl_part": None,
         "drop_ddl_part": None,
         "body_ddl_part": None,
+        "index_ddl_part": None,
+        "stats_ddl_part": None,
         "error_logs": [],
         "last_success_count": 0,
         "last_fail_count": 0,
@@ -113,7 +115,6 @@ def clean_ddl_text(text: str) -> str:
     for pattern in patterns:
         text = re.sub(pattern, "", text, flags=re.IGNORECASE)
 
-    # Oracle STORAGE(...) can include nested chunks; remove in a loop.
     storage_pattern = re.compile(r"STORAGE\s*\(", flags=re.IGNORECASE)
     while True:
         match = storage_pattern.search(text)
@@ -167,8 +168,9 @@ def set_metadata_transform(cursor: oracledb.Cursor) -> None:
     )
 
 
-def format_table_structure(ddl_text: str, ts_name: str) -> str:
+def format_table_structure(ddl_text: str, ts_name: str, index_ts_name: str) -> str:
     upper_ts = ts_name.strip().upper()
+    upper_index_ts = index_ts_name.strip().upper()
     first_open = ddl_text.find("(")
     if first_open == -1:
         return ddl_text
@@ -214,7 +216,12 @@ def format_table_structure(ddl_text: str, ts_name: str) -> str:
     body_lines: List[str] = []
     for item in items:
         if "CONSTRAINT " in item.upper() and "PRIMARY KEY" in item.upper():
-            continue
+            item = re.sub(
+                r"TABLESPACE\s+[A-Za-z0-9_\.]+",
+                f"TABLESPACE {upper_index_ts}",
+                item,
+                flags=re.IGNORECASE,
+            )
         prefix = "  " if not body_lines else ", "
         body_lines.append(f"{prefix}{item}")
 
@@ -239,14 +246,19 @@ def format_table_structure(ddl_text: str, ts_name: str) -> str:
     return f"{final_table}\nNOLOGGING TABLESPACE {upper_ts};"
 
 
-def format_index_line(idx_text: str, ts_name: str) -> str:
+def format_index_line(idx_text: str, ts_name: str, parallel: bool = False) -> str:
     idx_text = re.sub(r"TABLESPACE\s+[A-Za-z0-9_\.]+", "", idx_text, flags=re.IGNORECASE)
     idx_text = re.sub(r"NOLOGGING", "", idx_text, flags=re.IGNORECASE)
     idx_text = re.sub(r"LOGGING", "", idx_text, flags=re.IGNORECASE)
+    idx_text = re.sub(r"\bNOPARALLEL\b", "", idx_text, flags=re.IGNORECASE)
+    idx_text = re.sub(r"\bPARALLEL(?:\s+\d+)?\b", "", idx_text, flags=re.IGNORECASE)
     idx_text = re.sub(r"\s{2,}", " ", idx_text).strip()
     if idx_text.endswith(";"):
         idx_text = idx_text[:-1].strip()
-    return f"{idx_text} NOLOGGING TABLESPACE {ts_name.strip().upper()};"
+    suffix = f"TABLESPACE {ts_name.strip().upper()}"
+    if parallel:
+        suffix += " NOLOGGING PARALLEL 4"
+    return f"{idx_text} {suffix};"
 
 
 def read_lob_text(value: object) -> str:
@@ -258,6 +270,7 @@ def fetch_table_ddl(
     owner: str,
     table_name: str,
     table_ts: str,
+    index_ts: str,
 ) -> str:
     cursor.execute(
         "SELECT DBMS_METADATA.GET_DDL('TABLE', :table_name, :owner) FROM DUAL",
@@ -269,7 +282,7 @@ def fetch_table_ddl(
 
     raw = clean_ddl_text(read_lob_text(row[0]))
     combined_table_name = f"{owner}.{table_name}"
-    table_ddl = format_table_structure(raw, table_ts)
+    table_ddl = format_table_structure(raw, table_ts, index_ts)
     return re.sub(
         r"(CREATE\s+TABLE\s+)(?:[A-Za-z0-9_]+\.)?([A-Za-z0-9_]+)",
         rf"\1{combined_table_name}",
@@ -319,6 +332,7 @@ def fetch_comment_block(cursor: oracledb.Cursor, owner: str, table_name: str) ->
 
 
 def fetch_grant_block(cursor: oracledb.Cursor, owner: str, table_name: str) -> str:
+    """대상 서버의 사용자·롤 부재에 대비해 권한 DDL을 주석 처리한다."""
     try:
         cursor.execute(
             "SELECT DBMS_METADATA.GET_DEPENDENT_DDL('OBJECT_GRANT', :table_name, :owner) FROM DUAL",
@@ -339,41 +353,84 @@ def fetch_index_block(
     owner: str,
     table_name: str,
     index_ts: str,
-) -> str:
-    try:
+) -> Tuple[str, str, str, str]:
+    cursor.execute(
+        """
+        SELECT i.owner, i.index_name
+          FROM all_indexes i
+         WHERE i.table_owner = :owner
+           AND i.table_name = :table_name
+           AND i.index_type NOT IN ('LOB', 'IOT - TOP')
+           AND i.index_name NOT LIKE 'SYS$_%' ESCAPE '$'
+           AND NOT EXISTS (
+                SELECT 1
+                  FROM all_constraints c
+                 WHERE c.owner = i.table_owner
+                   AND c.table_name = i.table_name
+                   AND c.constraint_type IN ('P', 'U')
+                   AND c.index_owner = i.owner
+                   AND c.index_name = i.index_name
+           )
+         ORDER BY i.owner, i.index_name
+        """,
+        {"owner": owner, "table_name": table_name},
+    )
+
+    create_statements: List[str] = []
+    parallel_create_statements: List[str] = []
+    drop_statements: List[str] = []
+    noparallel_statements: List[str] = []
+    for index_owner, index_name in cursor.fetchall():
         cursor.execute(
-            "SELECT DBMS_METADATA.GET_DEPENDENT_DDL('INDEX', :table_name, :owner) FROM DUAL",
-            {"table_name": table_name, "owner": owner},
+            "SELECT DBMS_METADATA.GET_DDL('INDEX', :index_name, :index_owner) FROM DUAL",
+            {"index_name": index_name, "index_owner": index_owner},
         )
         row = cursor.fetchone()
         if not row or not row[0]:
-            return ""
+            continue
 
-        idx_ddl_full = read_lob_text(row[0])
-        idx_statements: List[str] = []
-        for raw_stmt in re.split(r"\bCREATE\s+", idx_ddl_full, flags=re.IGNORECASE):
-            if not raw_stmt.strip():
-                continue
-            stmt = clean_ddl_text("CREATE " + raw_stmt.strip())
-            if "SYS_" in stmt.upper():
-                continue
-            stmt = format_index_line(stmt, index_ts)
-            stmt = re.sub(
-                r"(CREATE\s+(?:UNIQUE\s+)?INDEX\s+)(?:[A-Za-z0-9_]+\.)?([A-Za-z0-9_]+)",
-                rf"\1{owner}.\2",
-                stmt,
-                flags=re.IGNORECASE,
-            )
-            stmt = re.sub(
-                r"(\bON\s+)(?:[A-Za-z0-9_]+\.)?([A-Za-z0-9_]+)",
-                rf"\1{owner}.{table_name}",
-                stmt,
-                flags=re.IGNORECASE,
-            )
-            idx_statements.append(stmt)
-        return "\n".join(idx_statements)
-    except Exception:
-        return ""
+        stmt = clean_ddl_text(read_lob_text(row[0]))
+        stmt = re.sub(
+            r"(CREATE\s+(?:(?:UNIQUE|BITMAP)\s+)?INDEX\s+)(?:[A-Za-z0-9_]+\.)?([A-Za-z0-9_]+)",
+            rf"\1{owner}.\2",
+            stmt,
+            flags=re.IGNORECASE,
+        )
+        stmt = re.sub(
+            r"(\bON\s+)(?:[A-Za-z0-9_]+\.)?([A-Za-z0-9_]+)",
+            rf"\1{owner}.{table_name}",
+            stmt,
+            flags=re.IGNORECASE,
+        )
+        create_statements.append(format_index_line(stmt, index_ts))
+        parallel_create_statements.append(format_index_line(stmt, index_ts, parallel=True))
+        drop_statements.append(f"DROP INDEX {str(index_owner).strip()}.{str(index_name).strip()};")
+        noparallel_statements.append(
+            f"ALTER INDEX {str(index_owner).strip()}.{str(index_name).strip()} NOPARALLEL;"
+        )
+
+    return (
+        "\n".join(create_statements),
+        "\n".join(drop_statements),
+        "\n".join(parallel_create_statements),
+        "\n".join(noparallel_statements),
+    )
+
+
+def build_stats_block(owner: str, table_name: str) -> str:
+    owner_sql = owner.strip().upper().replace("'", "''")
+    table_sql = table_name.strip().upper().replace("'", "''")
+    stats = "BEGIN\n"
+    stats += "    DBMS_STATS.GATHER_TABLE_STATS(\n"
+    stats += f"        ownname          => '{owner_sql}',\n"
+    stats += f"        tabname          => '{table_sql}',\n"
+    stats += "        estimate_percent => DBMS_STATS.AUTO_SAMPLE_SIZE,\n"
+    stats += "        method_opt       => 'FOR ALL COLUMNS SIZE AUTO',\n"
+    stats += "        degree           => 4,\n"
+    stats += "        cascade          => TRUE\n"
+    stats += "    );\n"
+    stats += "END;\n/"
+    return stats
 
 
 def generate_ddl_components(
@@ -382,13 +439,19 @@ def generate_ddl_components(
     selected_owner: str,
     table_ts: str,
     index_ts: str,
-) -> Tuple[bool, str]:
+) -> Tuple[bool, str, str, str, str, str]:
     try:
         owner, table_name = split_owner_and_table(cursor, table_input, selected_owner)
-        table_block = fetch_table_ddl(cursor, owner, table_name, table_ts)
-        index_block = fetch_index_block(cursor, owner, table_name, index_ts)
+        table_block = fetch_table_ddl(cursor, owner, table_name, table_ts, index_ts)
+        index_block, index_drop_block, parallel_index_block, index_noparallel_block = fetch_index_block(
+            cursor,
+            owner,
+            table_name,
+            index_ts,
+        )
         comment_block = fetch_comment_block(cursor, owner, table_name)
         grant_block = fetch_grant_block(cursor, owner, table_name)
+        stats_block = build_stats_block(owner, table_name)
 
         parts = [table_block]
         if index_block:
@@ -398,9 +461,16 @@ def generate_ddl_components(
         if grant_block:
             parts.append(grant_block)
 
-        return True, "\n\n".join(parts) + "\n"
+        return (
+            True,
+            "\n\n".join(parts) + "\n",
+            index_drop_block,
+            parallel_index_block,
+            index_noparallel_block,
+            stats_block,
+        )
     except Exception as exc:
-        return False, str(exc).strip()
+        return False, str(exc).strip(), "", "", "", ""
 
 
 def build_check_part(table_names: List[str], selected_owner: str) -> str:
@@ -492,6 +562,10 @@ def run_generation(
 
     total = len(table_inputs)
     body_list: List[str] = []
+    index_drop_list: List[str] = []
+    index_create_list: List[str] = []
+    index_noparallel_list: List[str] = []
+    stats_list: List[str] = []
     errors: List[str] = []
     plain_table_names = [name.split(".")[-1] for name in table_inputs]
 
@@ -506,7 +580,14 @@ def run_generation(
                 status_text.markdown(f"⏳ 진행 중: `{table_input}` ({idx}/{total})")
                 progress.progress(idx / total)
 
-                ok, result = generate_ddl_components(
+                (
+                    ok,
+                    result,
+                    index_drop_block,
+                    index_create_block,
+                    index_noparallel_block,
+                    stats_block,
+                ) = generate_ddl_components(
                     cursor,
                     table_input,
                     selected_owner,
@@ -515,6 +596,14 @@ def run_generation(
                 )
                 if ok:
                     body_list.append(result)
+                    if index_drop_block:
+                        index_drop_list.append(index_drop_block)
+                    if index_create_block:
+                        index_create_list.append(index_create_block)
+                    if index_noparallel_block:
+                        index_noparallel_list.append(index_noparallel_block)
+                    if stats_block:
+                        stats_list.append(stats_block)
                 else:
                     now_str = datetime.now().strftime("%H:%M:%S")
                     errors.append(f"[{now_str}] {table_input} - {result}")
@@ -531,6 +620,8 @@ def run_generation(
         st.session_state.check_ddl_part = None
         st.session_state.drop_ddl_part = None
         st.session_state.body_ddl_part = None
+        st.session_state.index_ddl_part = None
+        st.session_state.stats_ddl_part = None
         st.session_state.combined_ddl = None
         return
 
@@ -540,10 +631,30 @@ def run_generation(
     body_part += "/* [STAGE 3] CREATE STRUCTURES & METADATA */\n"
     body_part += "/******************************************/\n\n"
     body_part += "\n\n/******************************************/\n\n".join(body_list)
+    index_part = "/******************************************/\n"
+    index_part += "/* DROP INDEX */\n"
+    index_part += "/******************************************/\n"
+    index_part += "\n".join(index_drop_list)
+    index_part += "\n\n/******************************************/\n"
+    index_part += "/* CREATE INDEX */\n"
+    index_part += "/******************************************/\n"
+    index_part += "ALTER SESSION ENABLE PARALLEL DDL;\n\n"
+    index_part += "\n".join(index_create_list)
+    index_part += "\n\n/******************************************/\n"
+    index_part += "/* ALTER INDEX NOPARALLEL */\n"
+    index_part += "/******************************************/\n"
+    index_part += "\n".join(index_noparallel_list)
+    stats_part = "/******************************************/\n"
+    stats_part += "/* GATHER TABLE STATS */\n"
+    stats_part += "/******************************************/\n"
+    stats_part += "/* 데이터 적재 후에만 실행 */\n"
+    stats_part += "\n\n".join(stats_list)
 
     st.session_state.check_ddl_part = check_part
     st.session_state.drop_ddl_part = drop_part
     st.session_state.body_ddl_part = body_part
+    st.session_state.index_ddl_part = index_part
+    st.session_state.stats_ddl_part = stats_part
     st.session_state.combined_ddl = check_part + "\n\n\n" + drop_part + "\n\n\n" + body_part
 
 
@@ -580,7 +691,9 @@ def render_result(show_preview: bool) -> None:
         mime="text/plain",
     )
 
-    tabs = st.tabs(["요약", "SELECT COUNT", "DROP TABLE", "CREATE TABLE"])
+    tabs = st.tabs(
+        ["요약", "SELECT COUNT", "DROP TABLE", "CREATE TABLE", "INDEX DROP/CREATE", "TABLE STATS"]
+    )
 
     with tabs[0]:
         st.info(f"DDL 생성 완료: 성공 {success}건 / 실패 {fail}건")
@@ -593,6 +706,24 @@ def render_result(show_preview: bool) -> None:
             st.code(st.session_state.body_ddl_part or "", language="sql")
         else:
             st.caption("CREATE 미리보기가 꺼져 있습니다. 다운로드 파일을 사용하세요.")
+    with tabs[4]:
+        index_file_name = f"GetOracleIndexDDL_{datetime.now().strftime('%Y%m%d')}.sql"
+        st.download_button(
+            label=f"Download Index DDL Script ({index_file_name})",
+            data=st.session_state.index_ddl_part or "",
+            file_name=index_file_name,
+            mime="text/plain",
+        )
+        st.code(st.session_state.index_ddl_part or "", language="sql")
+    with tabs[5]:
+        stats_file_name = f"GatherTableStats_{datetime.now().strftime('%Y%m%d')}.sql"
+        st.download_button(
+            label=f"Download Table Stats Script ({stats_file_name})",
+            data=st.session_state.stats_ddl_part or "",
+            file_name=stats_file_name,
+            mime="text/plain",
+        )
+        st.code(st.session_state.stats_ddl_part or "", language="sql")
 
 
 def main() -> None:
@@ -648,7 +779,7 @@ def main() -> None:
             height=140,
             placeholder="테이블 명을 입력하세요 (쉼표 또는 공백 구분)\n예: ERP.ITEM_MST ERP.ITEM_DTL",
         )
-        submitted = st.form_submit_button("DDL 생성", use_container_width=True)
+        submitted = st.form_submit_button("DDL 생성", width="stretch")
 
     if submitted:
         try:
@@ -662,6 +793,8 @@ def main() -> None:
             st.session_state.check_ddl_part = None
             st.session_state.drop_ddl_part = None
             st.session_state.body_ddl_part = None
+            st.session_state.index_ddl_part = None
+            st.session_state.stats_ddl_part = None
 
     render_result(show_preview)
 
