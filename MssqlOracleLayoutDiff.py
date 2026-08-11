@@ -131,7 +131,7 @@ def source_column_name(value: object, colno: object, used: set[str]) -> str:
     cleaned = re.sub(r"[^A-Za-z0-9_$\#ㄱ-ㅎㅏ-ㅣ가-힣]", "_", raw)
     cleaned = re.sub(r"_+", "_", cleaned).strip("_")
     requires_prefix = not raw or not raw[0].isalpha()
-    base = raw if not requires_prefix else f"C_{cleaned}"
+    base = raw if not requires_prefix else f"C{cleaned}"
     base = base[:30]
     candidate = base
     suffix = f"_{colno_number(colno)}"
