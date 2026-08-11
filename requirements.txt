@@ -1,3 +1,4 @@
 streamlit
 oracledb
 boto3
+pandas
