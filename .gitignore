@@ -2,3 +2,6 @@
 __pycache__/
 *.pyc
 redshift_restore_runs/
+.cache/
+tmp/
+generated-image.png
