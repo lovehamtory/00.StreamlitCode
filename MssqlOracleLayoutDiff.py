@@ -357,9 +357,9 @@ def storage_clause(allocated_bytes: int | None) -> str:
     if allocated_bytes is None or allocated_bytes <= 0:
         return ""
     for divisor, suffix in ((1024**3, "G"), (1024**2, "M"), (1024, "K")):
-        if allocated_bytes % divisor == 0:
-            return f" STORAGE (INITIAL {allocated_bytes // divisor}{suffix})"
-    return f" STORAGE (INITIAL {allocated_bytes})"
+        if allocated_bytes >= divisor:
+            return f" STORAGE (INITIAL {math.ceil(allocated_bytes / divisor)}{suffix})"
+    return " STORAGE (INITIAL 1K)"
 
 
 def clean_metadata_ddl(text: str) -> str:
@@ -396,6 +396,105 @@ def fetch_current_table_allocations(target_owner: str, target_tables: list[str])
     return result
 
 
+def size_label(allocated_bytes: int | float | None) -> str:
+    value = int(allocated_bytes or 0)
+    if value <= 0:
+        return ""
+    for divisor, suffix in ((1024**3, "GB"), (1024**2, "MB"), (1024, "KB")):
+        if value >= divisor:
+            return f"{value / divisor:.2f}".rstrip("0").rstrip(".") + suffix
+    return f"{value}B"
+
+
+@st.cache_data(ttl=120, max_entries=20, show_spinner=False)
+def fetch_table_catalog_metrics(target_tables: tuple[str, ...]) -> pd.DataFrame:
+    if not target_tables:
+        return pd.DataFrame(columns=["대상 Oracle 테이블", "NUM_ROWS", "INSERTS", "DELETES", "할당 크기"])
+    rows: list[dict[str, object]] = []
+    for start in range(0, len(target_tables), 900):
+        names = target_tables[start : start + 900]
+        bind_names = [f"table_{index}" for index in range(len(names))]
+        bind_sql = ", ".join(f":{name}" for name in bind_names)
+        query = f"""
+            SELECT t.table_name,
+                   t.num_rows,
+                   NVL(m.inserts, 0) AS inserts,
+                   NVL(m.deletes, 0) AS deletes,
+                   NVL(s.allocated_bytes, 0) AS allocated_bytes
+              FROM user_tables t
+              LEFT JOIN user_tab_modifications m
+                ON m.table_name = t.table_name
+              LEFT JOIN (
+                    SELECT segment_name, SUM(bytes) AS allocated_bytes
+                      FROM user_segments
+                     WHERE segment_type = 'TABLE'
+                     GROUP BY segment_name
+              ) s
+                ON s.segment_name = t.table_name
+             WHERE t.table_name IN ({bind_sql})
+             ORDER BY t.table_name
+        """
+        with get_pool().acquire() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute(query, dict(zip(bind_names, names)))
+                for table_name, num_rows, inserts, deletes, allocated_bytes in cursor.fetchall():
+                    rows.append(
+                        {
+                            "대상 Oracle 테이블": clean_text(table_name),
+                            "NUM_ROWS": int(num_rows) if num_rows is not None else None,
+                            "INSERTS": int(inserts or 0),
+                            "DELETES": int(deletes or 0),
+                            "할당 크기": size_label(allocated_bytes),
+                        }
+                    )
+    return pd.DataFrame(rows)
+
+
+def add_table_catalog_metrics(table_changes: pd.DataFrame) -> pd.DataFrame:
+    if table_changes.empty:
+        return table_changes
+    enriched = table_changes.copy()
+    enriched["대상 Oracle 테이블"] = enriched.apply(
+        lambda row: target_table_name(normalized(row["DB"]), normalized(row["테이블"])), axis=1
+    )
+    metrics = fetch_table_catalog_metrics(tuple(sorted(enriched["대상 Oracle 테이블"].unique())))
+    return enriched.merge(metrics, on="대상 Oracle 테이블", how="left")
+
+
+def fetch_index_allocations(cursor: oracledb.Cursor, index_names: list[str]) -> dict[str, int]:
+    if not index_names:
+        return {}
+    allocations: dict[str, int] = {}
+    for start in range(0, len(index_names), 900):
+        names = index_names[start : start + 900]
+        bind_names = [f"index_{index}" for index in range(len(names))]
+        bind_sql = ", ".join(f":{name}" for name in bind_names)
+        cursor.execute(
+            f"""
+            SELECT SEGMENT_NAME, SUM(BYTES) AS ALLOCATED_BYTES
+              FROM USER_SEGMENTS
+             WHERE SEGMENT_TYPE = 'INDEX'
+               AND SEGMENT_NAME IN ({bind_sql})
+             GROUP BY SEGMENT_NAME
+            """,
+            dict(zip(bind_names, names)),
+        )
+        allocations.update({normalized(name): int(size) for name, size in cursor.fetchall() if size is not None})
+    return allocations
+
+
+def apply_storage_allocation(ddl: str, allocated_bytes: int | None) -> str:
+    clause = storage_clause(allocated_bytes)
+    if not clause:
+        return ddl
+    if re.search(r"\bSTORAGE\s*\([^()]*\)", ddl, flags=re.IGNORECASE):
+        return re.sub(r"\s*STORAGE\s*\([^()]*\)", clause, ddl, count=1, flags=re.IGNORECASE)
+    tablespace_match = re.search(r"\s+TABLESPACE\b", ddl, flags=re.IGNORECASE)
+    if tablespace_match:
+        return f"{ddl[:tablespace_match.start()]}{clause}{ddl[tablespace_match.start():]}"
+    return f"{ddl}{clause}"
+
+
 def existing_index_statements(cursor: oracledb.Cursor, target_owner: str, target_table: str) -> list[str]:
     query = """
         SELECT i.index_name
@@ -413,22 +512,24 @@ def existing_index_statements(cursor: oracledb.Cursor, target_owner: str, target
          ORDER BY i.index_name
     """
     cursor.execute(query, {"table_name": target_table})
+    index_names = [clean_text(row[0]) for row in cursor.fetchall()]
+    index_allocations = fetch_index_allocations(cursor, index_names)
     statements: list[str] = []
-    for (index_name,) in cursor.fetchall():
+    for index_name in index_names:
         cursor.execute(
             "SELECT DBMS_METADATA.GET_DDL('INDEX', :index_name, :index_owner) FROM DUAL",
             {"index_name": index_name, "index_owner": target_owner},
         )
         row = cursor.fetchone()
         if row and row[0]:
-            statements.append(clean_metadata_ddl(row[0]))
+            statements.append(apply_storage_allocation(clean_metadata_ddl(row[0]), index_allocations.get(normalized(index_name))))
     return statements
 
 
 def existing_constraint_statements(cursor: oracledb.Cursor, target_owner: str, target_table: str) -> list[str]:
     cursor.execute(
         """
-        SELECT constraint_name
+        SELECT constraint_name, index_name
           FROM user_constraints
          WHERE table_name = :table_name
            AND constraint_type IN ('P', 'U')
@@ -436,15 +537,17 @@ def existing_constraint_statements(cursor: oracledb.Cursor, target_owner: str, t
         """,
         {"table_name": target_table},
     )
+    constraints = [(clean_text(name), clean_text(index_name)) for name, index_name in cursor.fetchall()]
+    index_allocations = fetch_index_allocations(cursor, [index_name for _, index_name in constraints if index_name])
     statements: list[str] = []
-    for (constraint_name,) in cursor.fetchall():
+    for constraint_name, index_name in constraints:
         cursor.execute(
             "SELECT DBMS_METADATA.GET_DDL('CONSTRAINT', :constraint_name, :owner) FROM DUAL",
             {"constraint_name": constraint_name, "owner": target_owner},
         )
         row = cursor.fetchone()
         if row and row[0]:
-            statements.append(clean_metadata_ddl(row[0]))
+            statements.append(apply_storage_allocation(clean_metadata_ddl(row[0]), index_allocations.get(normalized(index_name))))
     return statements
 
 
@@ -583,10 +686,14 @@ def build_ddl_artifact(
     )
 
 
-def generated_table_grid(artifact: GeneratedDdl) -> pd.DataFrame:
+def generated_table_grid(artifact: GeneratedDdl, comment_only: bool = False) -> pd.DataFrame:
     rows: list[dict[str, str]] = []
     for source_db, source_table in artifact.source_keys:
         statements = [item for item in artifact.statements if (item.source_db, item.source_table) == (source_db, source_table)]
+        if comment_only:
+            statements = [item for item in statements if item.action == "COMMENT"]
+        if not statements:
+            continue
         target_table = statements[0].target_table if statements else ""
         rows.append({"DB": source_db, "테이블": source_table, "대상 Oracle 테이블": target_table, "DDL 구문 수": len(statements)})
     return pd.DataFrame(rows)
@@ -603,8 +710,12 @@ def render_ddl_preview(ddl_text: str) -> None:
     st.code(preview, language="sql")
 
 
-def execute_ddl(artifact: GeneratedDdl, selected_keys: set[tuple[str, str]]) -> pd.DataFrame:
-    selected_statements = [item for item in artifact.statements if (item.source_db, item.source_table) in selected_keys]
+def execute_ddl(artifact: GeneratedDdl, selected_keys: set[tuple[str, str]], comment_only: bool = False) -> pd.DataFrame:
+    selected_statements = [
+        item
+        for item in artifact.statements
+        if (item.source_db, item.source_table) in selected_keys and (not comment_only or item.action == "COMMENT")
+    ]
     status_by_table: dict[tuple[str, str], dict[str, str | int]] = {}
     for statement in selected_statements:
         key = (statement.source_db, statement.source_table)
@@ -781,8 +892,21 @@ def render_ddl_controls(selected_owners: list[str], selected_tables: pd.DataFram
         else:
             st.info("생성할 코멘트가 없습니다. ENTITY 또는 ATTR 값이 있는지 확인해 주세요.")
     with st.expander(":material/play_arrow: Oracle DDL 실행", expanded=False):
-        st.warning("변경·삭제 대상에는 DROP TABLE이 실행됩니다. 실행 실패 SQL은 계속 진행한 뒤 결과를 남깁니다.")
-        execution_targets = generated_table_grid(artifact)
+        execution_mode = st.segmented_control(
+            "실행 범위",
+            ["전체 DDL", "코멘트 DDL만"],
+            default="전체 DDL",
+            key="execution_mode",
+        )
+        comment_only = execution_mode == "코멘트 DDL만"
+        if comment_only:
+            st.info("COMMENT ON TABLE 및 COMMENT ON COLUMN 구문만 실행합니다. DROP, CREATE, 인덱스, 제약은 실행하지 않습니다.")
+        else:
+            st.warning("변경·삭제 대상에는 DROP TABLE이 실행됩니다. 실행 실패 SQL은 계속 진행한 뒤 결과를 남깁니다.")
+        execution_targets = generated_table_grid(artifact, comment_only=comment_only)
+        if execution_targets.empty:
+            st.info("선택한 실행 범위에 해당하는 DDL이 없습니다.")
+            return
         st.caption("실행할 테이블 행을 선택해 주십시오.")
         execution_selection = st.dataframe(
             execution_targets,
@@ -797,9 +921,11 @@ def render_ddl_controls(selected_owners: list[str], selected_tables: pd.DataFram
             (normalized(execution_targets.iloc[row]["DB"]), normalized(execution_targets.iloc[row]["테이블"]))
             for row in execution_rows
         }
-        confirmed = st.checkbox("생성된 DDL의 DROP 및 CREATE 실행을 확인했습니다.", key="execute_confirm")
-        if st.button("선택 테이블 Oracle DDL 실행", type="primary", icon=":material/play_arrow:", disabled=not confirmed or not execution_keys):
-            st.session_state.ddl_logs = execute_ddl(artifact, execution_keys)
+        confirmation_label = "생성된 COMMENT DDL 실행을 확인했습니다." if comment_only else "생성된 DDL의 DROP 및 CREATE 실행을 확인했습니다."
+        confirmed = st.checkbox(confirmation_label, key="execute_confirm")
+        button_label = "선택 테이블 COMMENT DDL 실행" if comment_only else "선택 테이블 Oracle DDL 실행"
+        if st.button(button_label, type="primary", icon=":material/play_arrow:", disabled=not confirmed or not execution_keys):
+            st.session_state.ddl_logs = execute_ddl(artifact, execution_keys, comment_only=comment_only)
     if st.session_state.ddl_logs is not None:
         st.subheader(":material/fact_check: DDL 실행 결과")
         st.dataframe(st.session_state.ddl_logs, hide_index=True, height=320)
@@ -846,6 +972,7 @@ def main() -> None:
                     compare_started = perf_counter()
                     table_changes, column_changes = compare_layouts(before_layout, after_layout)
                     compare_seconds = perf_counter() - compare_started
+                    table_changes = add_table_catalog_metrics(table_changes)
                     status.update(
                         label=f"변경 내역 분석 완료: 테이블 {len(table_changes):,}건 · 컬럼 {len(column_changes):,}건",
                         state="complete",
