@@ -584,7 +584,7 @@ def build_table_ddl(
             column_comments.append(f"COMMENT ON COLUMN {target_owner}.{target_table}.{oracle_identifier} IS {q_literal(source_attr)}")
     ddl = f"CREATE TABLE {target_owner}.{target_table} (\n"
     ddl += ",\n".join(column_lines)
-    ddl += f"\n) SEGMENT CREATION IMMEDIATE TABLESPACE {table_tablespace}{storage_clause(initial_size_bytes)}"
+    ddl += f"\n) SEGMENT CREATION IMMEDIATE NOLOGGING TABLESPACE {table_tablespace}{storage_clause(initial_size_bytes)}"
     table_comment = clean_text(entity)
     comments = ([] if not table_comment else [f"COMMENT ON TABLE {target_owner}.{target_table} IS {q_literal(table_comment)}"]) + column_comments
     return ddl, comments
