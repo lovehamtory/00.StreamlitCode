@@ -406,6 +406,13 @@ def size_label(allocated_bytes: int | float | None) -> str:
     return f"{value}B"
 
 
+def thousand_number_columns(frame: pd.DataFrame) -> dict[str, st.column_config.NumberColumn]:
+    return {
+        column: st.column_config.NumberColumn(format="%,d")
+        for column in frame.select_dtypes(include="number").columns
+    }
+
+
 @st.cache_data(ttl=120, max_entries=20, show_spinner=False)
 def fetch_table_catalog_metrics(target_tables: tuple[str, ...]) -> pd.DataFrame:
     if not target_tables:
@@ -802,7 +809,7 @@ def render_comparison() -> tuple[list[str], pd.DataFrame]:
                 on_select="rerun",
                 selection_mode="multi-row",
                 key="db_summary",
-                column_config={"합계": st.column_config.NumberColumn(format="%d")},
+                column_config=thousand_number_columns(summary),
                 height=430,
             )
     selected_rows = selection.selection.rows
@@ -822,6 +829,7 @@ def render_comparison() -> tuple[list[str], pd.DataFrame]:
                 on_select="rerun",
                 selection_mode="multi-row",
                 key="table_selection",
+                column_config=thousand_number_columns(selected_tables),
             )
     selected_rows = table_selection.selection.rows
     ddl_tables = selected_tables.iloc[selected_rows].copy() if selected_rows else pd.DataFrame(columns=selected_tables.columns)
@@ -832,7 +840,7 @@ def render_comparison() -> tuple[list[str], pd.DataFrame]:
     with st.container(border=True):
         st.markdown("#### :material/view_column: 컬럼 변경 내역")
         st.caption("테이블을 선택하면 선택 테이블의 컬럼 변경 내역만 표시합니다.")
-        st.dataframe(column_display, hide_index=True, height=430)
+        st.dataframe(column_display, hide_index=True, height=430, column_config=thousand_number_columns(column_display))
     return selected_owners, ddl_tables
 
 
@@ -915,6 +923,7 @@ def render_ddl_controls(selected_owners: list[str], selected_tables: pd.DataFram
             selection_mode="multi-row",
             key="execution_table_selection",
             height=260,
+            column_config=thousand_number_columns(execution_targets),
         )
         execution_rows = execution_selection.selection.rows
         execution_keys = {
@@ -928,7 +937,12 @@ def render_ddl_controls(selected_owners: list[str], selected_tables: pd.DataFram
             st.session_state.ddl_logs = execute_ddl(artifact, execution_keys, comment_only=comment_only)
     if st.session_state.ddl_logs is not None:
         st.subheader(":material/fact_check: DDL 실행 결과")
-        st.dataframe(st.session_state.ddl_logs, hide_index=True, height=320)
+        st.dataframe(
+            st.session_state.ddl_logs,
+            hide_index=True,
+            height=320,
+            column_config=thousand_number_columns(st.session_state.ddl_logs),
+        )
 
 
 def main() -> None:
