@@ -408,7 +408,7 @@ def size_label(allocated_bytes: int | float | None) -> str:
 
 def thousand_number_columns(frame: pd.DataFrame) -> dict[str, st.column_config.NumberColumn]:
     return {
-        column: st.column_config.NumberColumn(format="%,d")
+        column: st.column_config.NumberColumn(format="localized")
         for column in frame.select_dtypes(include="number").columns
     }
 
