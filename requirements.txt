@@ -2,3 +2,4 @@ streamlit
 oracledb
 boto3
 pandas
+pyodbc
