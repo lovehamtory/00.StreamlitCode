@@ -3,3 +3,4 @@ oracledb
 boto3
 pandas
 pyodbc
+openpyxl

@@ -6,6 +6,7 @@ from contextlib import ExitStack
 from dataclasses import dataclass
 from datetime import datetime
 from html import escape
+from io import BytesIO
 from typing import Any
 
 import oracledb
@@ -786,6 +787,49 @@ def error_cell_style(value: object) -> str:
     return ""
 
 
+def result_excel_bytes(frame: pd.DataFrame) -> bytes:
+    from openpyxl.styles import Border, Font, PatternFill, Side
+
+    export_frame = frame.copy()
+    for column in ("소스DB", "소스TABLE", "소스ENTITY", "타겟TABLE"):
+        if column in export_frame:
+            export_frame[column] = export_frame[column].map(lambda value: "" if pd.isna(value) else str(value))
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        export_frame.to_excel(writer, sheet_name="검증결과", index=False)
+        worksheet = writer.sheets["검증결과"]
+        worksheet.freeze_panes = "A2"
+        worksheet.auto_filter.ref = worksheet.dimensions
+        thin_side = Side(style="thin", color="9EADBF")
+        all_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
+        body_font = Font(name="맑은 고딕", size=10)
+        header_font = Font(name="맑은 고딕", size=10, bold=True)
+        header_fill = PatternFill(fill_type="solid", fgColor="FFFF00")
+        for row_index, row in enumerate(worksheet.iter_rows(), start=1):
+            for cell in row:
+                cell.font = header_font if row_index == 1 else body_font
+                cell.border = all_border
+                if row_index == 1:
+                    cell.fill = header_fill
+        for column_cells in worksheet.columns:
+            column_letter = column_cells[0].column_letter
+            worksheet.column_dimensions[column_letter].width = min(max(len(str(cell.value or "")) for cell in column_cells) + 2, 42)
+        header_columns = {cell.value: cell.column for cell in worksheet[1]}
+        for header in ("소스DB", "소스TABLE", "소스ENTITY", "타겟TABLE"):
+            if header in header_columns:
+                for row in worksheet.iter_rows(min_row=2, min_col=header_columns[header], max_col=header_columns[header]):
+                    row[0].number_format = "@"
+        for header in ("소스CNT", "타겟CNT", "차이"):
+            if header in header_columns:
+                for row in worksheet.iter_rows(min_row=2, min_col=header_columns[header], max_col=header_columns[header]):
+                    row[0].number_format = "#,##0"
+        for header in ("소스DATA MB", "소스DATA GB", "소스INDEX MB", "소스합계 MB"):
+            if header in header_columns:
+                for row in worksheet.iter_rows(min_row=2, min_col=header_columns[header], max_col=header_columns[header]):
+                    row[0].number_format = "#,##0.00000"
+    return output.getvalue()
+
+
 def render_results() -> None:
     results = st.session_state.countcheck_results
     result_section = st.container(border=True, gap=None)
@@ -817,6 +861,14 @@ def render_results() -> None:
     if selected_error != "전체":
         filtered = filtered[filtered["오류여부"] == selected_error]
     styled_results = filtered.style.map(result_cell_style, subset=["검증결과"]).map(error_cell_style, subset=["오류여부"])
+    result_section.download_button(
+        "조회 결과 엑셀 다운로드",
+        data=result_excel_bytes(filtered),
+        file_name=f"MSSQL_ORACLE_검증결과_{datetime.now():%Y%m%d_%H%M%S}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        icon=":material/download:",
+        width="content",
+    )
     render_fixed_gap(20, result_section)
     result_section.dataframe(
         styled_results,
