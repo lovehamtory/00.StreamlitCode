@@ -189,7 +189,6 @@ def render_operations_header() -> None:
         <div class="ops-header">
           <div class="ops-kicker">DATA MIGRATION CONTROL ROOM</div>
           <h1>▣ MSSQL ↔ ORACLE 건수 검증</h1>
-          <p>⚙️ Created by ♡홍율파파</p>
         </div>
         """,
         unsafe_allow_html=True,
