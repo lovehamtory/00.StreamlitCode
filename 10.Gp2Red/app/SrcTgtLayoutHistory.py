@@ -9,7 +9,9 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 
-from SrcTgtSecurity import allowed, require_access
+from SrcTgtSecurity import allowed, query_frame, require_access
+from SrcTgtConnection import connection_frame, connection_label, runtime_connection_values, selectable_connections
+from SrcTgtTargetReflection import render_target_reflection
 
 try:
     import psycopg
@@ -17,7 +19,7 @@ except ImportError:
     psycopg = None
 
 
-LAYOUT_COLUMNS = ["STD_DT", "OWNER", "TBL", "ENTITY", "COLNO", "COL", "ATTR", "DATATYPE", "LEN", "ISPK", "NULLABLE"]
+LAYOUT_COLUMNS = ["SRC_CONN_ID", "STD_DT", "OWNER", "TBL", "ENTITY", "COLNO", "COL", "ATTR", "DATATYPE", "LEN", "ISPK", "NULLABLE"]
 
 
 def text(value: object) -> str:
@@ -87,12 +89,21 @@ def snapshot_label(value: object) -> str:
     return f"{digits[:4]}-{digits[4:6]}-{digits[6:]}" if len(digits) == 8 else raw
 
 
+def ensure_layout_connection_column(target: dict[str, Any], schema_name: str, table_name: str) -> None:
+    with connect(target) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute("SELECT 1 FROM information_schema.columns WHERE table_schema = %s AND table_name = %s AND column_name = 'src_conn_id'", (schema_name.lower(), table_name.lower()))
+            if cursor.fetchone() is None:
+                cursor.execute(f"ALTER TABLE {qualified(schema_name, table_name)} ADD COLUMN SRC_CONN_ID VARCHAR(100)")
+        connection.commit()
+
+
 @st.cache_data(ttl=120, show_spinner=False)
-def fetch_snapshot_dates(target_key: tuple[str, str, str, int], schema_name: str, table_name: str) -> list[str]:
+def fetch_snapshot_dates(target_key: tuple[str, str, str, int], schema_name: str, table_name: str, source_connection_id: str) -> list[str]:
     target = {"host": target_key[0], "database": target_key[1], "user": target_key[2], "port": target_key[3], "password": st.secrets["redshift_sql"]["password"], "sslmode": st.secrets["redshift_sql"].get("sslmode", ""), "connect_timeout": st.secrets["redshift_sql"].get("connect_timeout", 15)}
     with connect(target) as connection:
         with connection.cursor() as cursor:
-            cursor.execute(f"SELECT DISTINCT STD_DT FROM {qualified(schema_name, table_name)} ORDER BY STD_DT")
+            cursor.execute(f"SELECT DISTINCT STD_DT FROM {qualified(schema_name, table_name)} WHERE COALESCE(SRC_CONN_ID, 'SRC_GP') = %s ORDER BY STD_DT", (source_connection_id,))
             return [text(row[0]) for row in cursor.fetchall() if text(row[0])]
 
 
@@ -100,11 +111,11 @@ def dataframe_from_rows(rows: list[tuple[Any, ...]], columns: list[str]) -> pd.D
     return pd.DataFrame(rows, columns=columns)
 
 
-def fetch_layout_pair(target: dict[str, Any], schema_name: str, table_name: str, before_date: str, after_date: str) -> tuple[pd.DataFrame, pd.DataFrame]:
-    query = f"SELECT {', '.join(LAYOUT_COLUMNS)} FROM {qualified(schema_name, table_name)} WHERE STD_DT IN (%s, %s) ORDER BY OWNER, TBL, COLNO"
+def fetch_layout_pair(target: dict[str, Any], schema_name: str, table_name: str, source_connection_id: str, before_date: str, after_date: str) -> tuple[pd.DataFrame, pd.DataFrame]:
+    query = f"SELECT {', '.join(LAYOUT_COLUMNS)} FROM {qualified(schema_name, table_name)} WHERE COALESCE(SRC_CONN_ID, 'SRC_GP') = %s AND STD_DT IN (%s, %s) ORDER BY OWNER, TBL, COLNO"
     with connect(target) as connection:
         with connection.cursor() as cursor:
-            cursor.execute(query, (before_date, after_date))
+            cursor.execute(query, (source_connection_id, before_date, after_date))
             frame = dataframe_from_rows(cursor.fetchall(), LAYOUT_COLUMNS)
     return frame[frame.STD_DT.map(text) == before_date].copy(), frame[frame.STD_DT.map(text) == after_date].copy()
 
@@ -166,11 +177,11 @@ def list_source_schemas(source: dict[str, Any]) -> list[str]:
             return [text(row[0]) for row in cursor.fetchall()]
 
 
-def fetch_source_layout(source: dict[str, Any], schemas: list[str], standard_date: str) -> pd.DataFrame:
+def fetch_source_layout(source: dict[str, Any], source_connection_id: str, schemas: list[str], standard_date: str) -> pd.DataFrame:
     if not schemas:
         raise ValueError("원천 스키마를 한 개 이상 선택하십시오.")
     query = """
-        SELECT %s, c.table_schema, c.table_name, COALESCE(obj_description(pc.oid, 'pg_class'), ''),
+        SELECT %s, %s, c.table_schema, c.table_name, COALESCE(obj_description(pc.oid, 'pg_class'), ''),
                c.ordinal_position, c.column_name, COALESCE(col_description(pc.oid, c.ordinal_position), ''),
                c.data_type, COALESCE(c.character_maximum_length::text, c.numeric_precision::text, ''),
                CASE WHEN pk.column_name IS NULL THEN '' ELSE 'Y' END, c.is_nullable
@@ -190,11 +201,11 @@ def fetch_source_layout(source: dict[str, Any], schemas: list[str], standard_dat
     """
     with connect(source) as connection:
         with connection.cursor() as cursor:
-            cursor.execute(query, (standard_date, schemas))
+            cursor.execute(query, (source_connection_id, standard_date, schemas))
             return dataframe_from_rows(cursor.fetchall(), LAYOUT_COLUMNS)
 
 
-def save_layout(target: dict[str, Any], schema_name: str, table_name: str, standard_date: str, selected_schemas: list[str], layout: pd.DataFrame) -> int:
+def save_layout(target: dict[str, Any], schema_name: str, table_name: str, source_connection_id: str, standard_date: str, selected_schemas: list[str], layout: pd.DataFrame) -> int:
     if layout.empty:
         raise ValueError("적재할 원천 레이아웃이 없습니다.")
     owners = [text(value) for value in selected_schemas if text(value)]
@@ -204,7 +215,7 @@ def save_layout(target: dict[str, Any], schema_name: str, table_name: str, stand
     owner_placeholders = ", ".join("%s" for _ in owners)
     with connect(target) as connection:
         with connection.cursor() as cursor:
-            cursor.execute(f"DELETE FROM {qualified(schema_name, table_name)} WHERE STD_DT=%s AND OWNER IN ({owner_placeholders})", (standard_date, *owners))
+            cursor.execute(f"DELETE FROM {qualified(schema_name, table_name)} WHERE COALESCE(SRC_CONN_ID, 'SRC_GP')=%s AND STD_DT=%s AND OWNER IN ({owner_placeholders})", (source_connection_id, standard_date, *owners))
             cursor.executemany(insert, [tuple(row) for row in layout[LAYOUT_COLUMNS].itertuples(index=False, name=None)])
         connection.commit()
     return len(layout)
@@ -212,38 +223,6 @@ def save_layout(target: dict[str, Any], schema_name: str, table_name: str, stand
 
 def number_columns(frame: pd.DataFrame) -> dict[str, Any]:
     return {column: st.column_config.NumberColumn(format="localized") for column in frame.columns if pd.api.types.is_numeric_dtype(frame[column])}
-
-
-def ddl_identifier(value: object) -> str:
-    name = text(value)
-    if not name:
-        raise ValueError("DDL 식별값이 없습니다.")
-    return '"' + name.replace('"', '""') + '"'
-
-
-def ddl_data_type(row: pd.Series) -> str:
-    data_type, length = text(row.DATATYPE).upper(), text(row.LEN)
-    if not data_type:
-        raise ValueError("원천 데이터 타입이 없습니다.")
-    if length and "(" not in data_type and data_type.lower() in {"character varying", "varchar", "character", "char", "numeric", "decimal"}:
-        return f"{data_type}({length})"
-    return data_type
-
-
-def reference_ddl(owner: str, table: str, before: pd.DataFrame, after: pd.DataFrame) -> str:
-    qualified_name = f"{ddl_identifier(owner)}.{ddl_identifier(table)}"
-    drop = f"DROP TABLE IF EXISTS {qualified_name};"
-    if after.empty:
-        return drop
-    definitions = []
-    for row in after.sort_values("COLNO", key=lambda values: values.map(colno_order)).itertuples(index=False):
-        null_clause = "" if normalized(row.NULLABLE) in {"YES", "Y", "TRUE"} else " NOT NULL"
-        definitions.append(f"    {ddl_identifier(row.COL)} {ddl_data_type(pd.Series(row._asdict()))}{null_clause}")
-    primary_key = [ddl_identifier(row.COL) for row in after.sort_values("COLNO", key=lambda values: values.map(colno_order)).itertuples(index=False) if normalized(row.ISPK) in {"Y", "YES", "TRUE"}]
-    if primary_key:
-        definitions.append(f"    PRIMARY KEY ({', '.join(primary_key)})")
-    body = ",\n".join(definitions)
-    return f"{drop}\n\nCREATE TABLE {qualified_name} (\n{body}\n);"
 
 
 def render_comparison() -> None:
@@ -274,18 +253,6 @@ def render_comparison() -> None:
     with st.container(border=True):
         st.markdown("#### :material/view_column: 컬럼")
         st.dataframe(shown_columns, hide_index=True, height=380, column_config=number_columns(shown_columns))
-    candidate_keys = selected_keys or {(normalized(row["스키마"]), normalized(row["테이블"])) for _, row in selected_tables.iterrows()}
-    if candidate_keys:
-        options = sorted(candidate_keys)
-        selected_ddl = st.selectbox("DDL 참조 테이블", options, format_func=lambda value: f"{value[0]}.{value[1]}", key="gp_layout_ddl_table")
-        before = comparison["before"]
-        after = comparison["after"]
-        owner, table = selected_ddl
-        ddl = reference_ddl(owner, table, before[(before.OWNER.map(normalized) == owner) & (before.TBL.map(normalized) == table)], after[(after.OWNER.map(normalized) == owner) & (after.TBL.map(normalized) == table)])
-        with st.container(border=True):
-            st.markdown("#### :material/code: DBA 참조 DDL")
-            st.code(ddl, language="sql")
-            st.download_button("DDL 다운로드", ddl, file_name=f"{owner}_{table}_reference.sql", mime="text/sql", icon=":material/download:")
 
 
 def main() -> None:
@@ -295,15 +262,35 @@ def main() -> None:
         st.stop()
     init_state(); apply_green_style()
     try:
-        source, target = config("greenplum"), config("redshift_sql")
+        target = config("redshift_sql")
     except Exception as error:
         st.error(str(error), icon=":material/error:")
         st.stop()
+    try:
+        connections = connection_frame(query_frame, access.values, access.schema_name, qualified, active_only=True)
+        source_connections = selectable_connections(connections, "SRC")
+        source_connections = source_connections.loc[source_connections.dbms_cd.map(text).str.upper().eq("GREENPLUM")].copy()
+        if source_connections.empty:
+            raise ValueError("사용 중인 Greenplum 원천 접속정보를 접속관리에서 등록하십시오.")
+        source_connection_id = st.selectbox("원천 접속", source_connections.conn_id.tolist(), format_func=lambda value: connection_label(source_connections, value), key="layout_source_connection")
+        source = runtime_connection_values(source_connections, source_connection_id)
+    except Exception as error:
+        st.error(f"원천 접속정보 조회 실패: {error}", icon=":material/error:")
+        st.stop()
     schema_name, table_name = layout_settings(target)
-    st.markdown('<div class="hero"><h1>✦ 원천 레이아웃 이력</h1><p>⚙️ Created by ♡홍율파파♡</p></div>', unsafe_allow_html=True)
+    try:
+        ensure_layout_connection_column(target, schema_name, table_name)
+    except Exception as error:
+        st.error(f"원천 레이아웃 구조 준비 실패: {error}", icon=":material/error:")
+        st.stop()
+    st.markdown('<div class="hero"><h1>✦ 구조조회</h1><p>⚙️ Created by ♡홍율파파♡</p></div>', unsafe_allow_html=True)
+    mode = st.segmented_control("구조 업무", ["원천 레이아웃", "대상 반영안"], default="원천 레이아웃", label_visibility="collapsed", key="structure_mode")
+    if mode == "대상 반영안":
+        render_target_reflection(access, target, schema_name, table_name)
+        return
     try:
         target_key = (text(target["host"]), text(target["database"]), text(target["user"]), int(target["port"]))
-        dates = fetch_snapshot_dates(target_key, schema_name, table_name)
+        dates = fetch_snapshot_dates(target_key, schema_name, table_name, source_connection_id)
     except Exception as error:
         st.error(f"레이아웃 기준일 조회 실패: {error}", icon=":material/error:")
         st.stop()
@@ -336,7 +323,7 @@ def main() -> None:
             before_date, after_date = dates[labels.index(before_label)], dates[labels.index(after_label)]
             try:
                 with st.status("변경 내역 조회", expanded=True) as status:
-                    started = perf_counter(); before_layout, after_layout = fetch_layout_pair(target, schema_name, table_name, before_date, after_date); loaded = perf_counter()-started
+                    started = perf_counter(); before_layout, after_layout = fetch_layout_pair(target, schema_name, table_name, source_connection_id, before_date, after_date); loaded = perf_counter()-started
                     tables, columns = compare_layouts(before_layout, after_layout)
                     status.update(label=f"완료 · {len(tables):,} 테이블 · {len(columns):,} 컬럼 · {loaded:.1f}초", state="complete", expanded=False)
                 st.session_state.gp_layout_comparison = {"tables": tables, "columns": columns, "before": before_layout, "after": after_layout}
@@ -346,8 +333,8 @@ def main() -> None:
         try:
             standard_date = standard_day.strftime("%Y%m%d")
             with st.status("원천 레이아웃 적재", expanded=True) as status:
-                layout = fetch_source_layout(source, selected_schemas, standard_date)
-                count = save_layout(target, schema_name, table_name, standard_date, selected_schemas, layout)
+                layout = fetch_source_layout(source, source_connection_id, selected_schemas, standard_date)
+                count = save_layout(target, schema_name, table_name, source_connection_id, standard_date, selected_schemas, layout)
                 status.update(label=f"완료 · {count:,} 컬럼", state="complete", expanded=False)
             fetch_snapshot_dates.clear()
             st.session_state.gp_layout_capture = {"date": standard_date, "count": count}

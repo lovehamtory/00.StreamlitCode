@@ -32,8 +32,8 @@ page = st.navigation(
         "이관": [
             st.Page(ROOT / "SrcTgtControl.py", title="이관 관리", icon=":material/account_tree:"),
         ],
-        "원천": [
-            st.Page(ROOT / "SrcTgtLayoutHistory.py", title="원천 레이아웃", icon=":material/difference:"),
+        "구조": [
+            st.Page(ROOT / "SrcTgtLayoutHistory.py", title="구조조회", icon=":material/difference:"),
         ],
     },
     position="sidebar",

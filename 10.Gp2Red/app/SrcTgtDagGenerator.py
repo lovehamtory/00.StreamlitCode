@@ -98,19 +98,30 @@ def subject_dag() -> None:
     @task
     def load_mappings(**context: Any) -> list[dict[str, Any]]:
         query = """
-            SELECT mpg_id, sql_dir_nm, src_conn_id, src_sch_nm, src_tbl_nm,
-                   tgt_conn_id, tgt_sch_nm, tgt_tbl_nm, load_mthd_cd, wm_col_nm, incr_where_tmpl,
-                   trnsf_pfl_cd, s3_stg_path, s3_file_fmt_cd, tgt_ddl_sql, meta_ver_no,
-                   dflt_parl_cnt, dag_max_parl_cnt
-              FROM mig_meta.vw_mig_dag_tbl_mpg
-             WHERE sbj_area_cd = %s
-               AND dag_id = %s
-             ORDER BY tgt_sch_nm, tgt_tbl_nm, mpg_id
+            SELECT M.mpg_id, M.sql_dir_nm, M.src_conn_id, SRC.conn_nm AS src_conn_nm, SRC.dbms_cd AS src_dbms_cd, SRC.sec_sect_nm AS src_sec_sect_nm, SRC.af_conn_id AS src_af_conn_id, M.src_sch_nm, M.src_tbl_nm,
+                   M.tgt_conn_id, TGT.conn_nm AS tgt_conn_nm, TGT.dbms_cd AS tgt_dbms_cd, TGT.sec_sect_nm AS tgt_sec_sect_nm, TGT.af_conn_id AS tgt_af_conn_id, M.tgt_sch_nm, M.tgt_tbl_nm, M.load_mthd_cd, M.wm_col_nm, M.incr_where_tmpl,
+                   M.trnsf_pfl_cd, M.s3_stg_path, M.s3_file_fmt_cd, M.tgt_ddl_sql, M.meta_ver_no,
+                   M.dflt_parl_cnt, M.dag_max_parl_cnt
+              FROM mig_meta.vw_mig_dag_tbl_mpg M
+              LEFT JOIN mig_meta.tb_mig_conn SRC
+                ON SRC.conn_id = M.src_conn_id
+               AND SRC.conn_dvsn_cd = 'SRC'
+               AND SRC.active_yn = TRUE
+              LEFT JOIN mig_meta.tb_mig_conn TGT
+                ON TGT.conn_id = M.tgt_conn_id
+               AND TGT.conn_dvsn_cd = 'TGT'
+               AND TGT.active_yn = TRUE
+             WHERE M.sbj_area_cd = %s
+               AND M.dag_id = %s
+             ORDER BY M.tgt_sch_nm, M.tgt_tbl_nm, M.mpg_id
         """
         with metadata_connection() as connection:
             with connection.cursor() as cursor:
                 cursor.execute(query, (SBJ_AREA_CD, DAG_ID))
                 rows = [dict(row) for row in cursor.fetchall()]
+        invalid = [str(row.get("mpg_id")) for row in rows if not str(row.get("src_af_conn_id") or "").strip() or not str(row.get("tgt_af_conn_id") or "").strip()]
+        if invalid:
+            raise ValueError(f"접속관리가 완료되지 않은 테이블매핑입니다: {', '.join(invalid)}")
         wrk_cnd_val = json.dumps(context["dag_run"].conf or {}, ensure_ascii=False, sort_keys=True)
         for index, row in enumerate(rows):
             row["dag_run_id"] = context["dag_run"].run_id

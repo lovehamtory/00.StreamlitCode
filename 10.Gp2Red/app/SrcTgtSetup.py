@@ -17,7 +17,7 @@ except ImportError:
 
 PROJECT_ROOT = Path(__file__).parent.parent
 SCHEMA_CONFIG = PROJECT_ROOT.parent / ".streamlit" / "migration_setup.toml"
-REQUIRED_TABLES = {"tb_mig_sbj_area", "tb_mig_sbj_dag_mpg", "tb_mig_usr", "tb_mig_usr_auth", "tb_mig_tbl_mpg", "tb_mig_col_mpg", "tb_mig_run_log", "tb_mig_artf_item"}
+REQUIRED_TABLES = {"tb_mig_sbj_area", "tb_mig_sbj_dag_mpg", "tb_mig_usr", "tb_mig_usr_auth", "tb_mig_conn", "tb_mig_tbl_mpg", "tb_mig_col_mpg", "tb_mig_run_log", "tb_mig_artf_item"}
 
 
 def text(value: object) -> str:

@@ -7,6 +7,7 @@ import pandas as pd
 import streamlit as st
 
 from SrcTgtArtifact import excel_bytes
+from SrcTgtConnection import connection_frame, connection_label, runtime_connection_values, selectable_connections, validate_mapping_connections
 
 
 TABLE_FIELDS = [
@@ -79,8 +80,8 @@ def normalize_columns(frame: pd.DataFrame, fields: list[str]) -> pd.DataFrame:
 
 def defaults(row: dict[str, object]) -> dict[str, object]:
     output = {field: row.get(field) for field in TABLE_FIELDS}
-    output["SRC_CONN_ID"] = text(output["SRC_CONN_ID"]) or "SRC_GP"
-    output["TGT_CONN_ID"] = text(output["TGT_CONN_ID"]) or "TGT_RED"
+    output["SRC_CONN_ID"] = (text(output["SRC_CONN_ID"]) or "SRC_GP").upper()
+    output["TGT_CONN_ID"] = (text(output["TGT_CONN_ID"]) or "TGT_RED").upper()
     output["TGT_DIST_STYLE"] = text(output["TGT_DIST_STYLE"]).upper() or "AUTO"
     output["TGT_SORT_STYLE"] = text(output["TGT_SORT_STYLE"]).upper() or "AUTO"
     output["TGT_ENCD_AUTO_YN"] = boolean(output["TGT_ENCD_AUTO_YN"], True)
@@ -238,6 +239,8 @@ def save_bundle(connect: Callable[[dict[str, Any]], Any], values: dict[str, Any]
                 cursor.execute(f"SELECT 1 FROM {subject_table} WHERE sbj_area_cd = %s AND up_sbj_area_cd IS NOT NULL AND active_yn = TRUE", (subject_area,))
                 if cursor.fetchone() is None:
                     raise ValueError(f"사용 중인 실행 주제영역을 찾을 수 없습니다: {subject_area}")
+            for row in tables:
+                validate_mapping_connections(cursor, schema_name, qualified, row["SRC_CONN_ID"], row["TGT_CONN_ID"])
             uploaded_ids = {natural_key(row): upsert_table(cursor, schema_name, qualified, row, user_id) for row in tables}
             uploaded_scopes = {uploaded_ids[natural_key(row)]: (text(row["PRJ_CD"]), text(row["SBJ_AREA_CD"])) for row in tables}
             mapped_columns: list[tuple[int, dict[str, object]]] = []
@@ -301,22 +304,22 @@ def source_layout_table(values: dict[str, Any]) -> tuple[str, str]:
 
 def source_snapshots(query_frame: Callable[..., pd.DataFrame], values: dict[str, Any], qualified: Callable[[str, str], str]) -> pd.DataFrame:
     schema_name, table_name = source_layout_table(values)
-    query = f'''SELECT std_dt AS "STD_DT", owner AS "OWNER", tbl AS "TBL", MAX(entity) AS "ENTITY"
+    query = f'''SELECT COALESCE(src_conn_id, 'SRC_GP') AS "SRC_CONN_ID", std_dt AS "STD_DT", owner AS "OWNER", tbl AS "TBL", MAX(entity) AS "ENTITY"
                   FROM {qualified(schema_name, table_name)}
-                 GROUP BY std_dt, owner, tbl
-                 ORDER BY std_dt DESC, owner, tbl'''
+                 GROUP BY COALESCE(src_conn_id, 'SRC_GP'), std_dt, owner, tbl
+                 ORDER BY std_dt DESC, src_conn_id, owner, tbl'''
     return query_frame(values, query)
 
 
-def source_columns(query_frame: Callable[..., pd.DataFrame], values: dict[str, Any], qualified: Callable[[str, str], str], standard_date: str, owner: str, table: str) -> pd.DataFrame:
+def source_columns(query_frame: Callable[..., pd.DataFrame], values: dict[str, Any], qualified: Callable[[str, str], str], source_connection_id: str, standard_date: str, owner: str, table: str) -> pd.DataFrame:
     schema_name, table_name = source_layout_table(values)
     query = f'''SELECT colno AS "COL_ORD", colno AS "SRC_COL_NO", col AS "SRC_COL_NM", datatype AS "SRC_DATA_TYPE",
                       CASE WHEN UPPER(COALESCE(nullable, 'YES')) IN ('NO', 'N', 'FALSE') THEN FALSE ELSE TRUE END AS "SRC_NULL_YN",
                       CASE WHEN UPPER(COALESCE(ispk, '')) IN ('Y', 'YES', 'TRUE') THEN 'PK' ELSE NULL END AS "SRC_KEY_ROLE_CD"
                   FROM {qualified(schema_name, table_name)}
-                 WHERE std_dt = %s AND owner = %s AND tbl = %s
+                 WHERE COALESCE(src_conn_id, 'SRC_GP') = %s AND std_dt = %s AND owner = %s AND tbl = %s
                  ORDER BY colno'''
-    source = query_frame(values, query, (standard_date, owner, table))
+    source = query_frame(values, query, (source_connection_id, standard_date, owner, table))
     if source.empty:
         raise ValueError("선택한 원천 레이아웃의 컬럼을 찾을 수 없습니다.")
     result = pd.DataFrame(columns=COLUMN_FIELDS[9:])
@@ -378,17 +381,27 @@ def render_single(maps: pd.DataFrame, values: dict[str, Any], schema_name: str, 
     options = ["신규", *[int(value) for value in maps.mpg_id.tolist()]]
     selected = st.selectbox("테이블매핑", options, format_func=lambda value: "신규 테이블매핑" if value == "신규" else f"{value} · {maps.loc[maps.mpg_id.eq(value)].iloc[0].src_sch_nm}.{maps.loc[maps.mpg_id.eq(value)].iloc[0].src_tbl_nm} → {maps.loc[maps.mpg_id.eq(value)].iloc[0].tgt_sch_nm}.{maps.loc[maps.mpg_id.eq(value)].iloc[0].tgt_tbl_nm}")
     current = None if selected == "신규" else maps.loc[maps.mpg_id.eq(selected)].iloc[0]
+    try:
+        connections = connection_frame(query_frame, values, schema_name, qualified, active_only=True)
+        source_connections = selectable_connections(connections, "SRC", None if current is None else current.src_conn_id)
+        target_connections = selectable_connections(connections, "TGT", None if current is None else current.tgt_conn_id)
+        if source_connections.empty or target_connections.empty:
+            raise ValueError("사용 중인 원천·대상 접속정보를 접속관리에서 각각 한 건 이상 등록하십시오.")
+    except Exception as error:
+        st.error(f"접속정보 조회 실패: {error}", icon=":material/error:")
+        return
     source_snapshot = None
     automatic_key = f"mapping_auto_columns_{selected}"
     if current is None:
         try:
             snapshots = source_snapshots(query_frame, values, qualified)
+            snapshots = snapshots.loc[snapshots.SRC_CONN_ID.map(text).str.upper().isin(source_connections.conn_id.map(text).str.upper())].copy()
             if snapshots.empty:
-                raise ValueError("원천 레이아웃 적재 이력이 없습니다. 먼저 원천 레이아웃에서 기준일을 적재하십시오.")
-            snapshot_options = snapshots[["STD_DT", "OWNER", "TBL"]].astype(str).agg(" | ".join, axis=1).tolist()
+                raise ValueError("사용 중인 원천 접속정보의 레이아웃 적재 이력이 없습니다. 먼저 원천 레이아웃에서 기준일을 적재하십시오.")
+            snapshot_options = snapshots[["SRC_CONN_ID", "STD_DT", "OWNER", "TBL"]].astype(str).agg(" | ".join, axis=1).tolist()
             selected_snapshot = st.selectbox("원천 레이아웃", snapshot_options, key="new_mapping_source")
             source_snapshot = snapshots.iloc[snapshot_options.index(selected_snapshot)]
-            existing = source_columns(query_frame, values, qualified, text(source_snapshot.STD_DT), text(source_snapshot.OWNER), text(source_snapshot.TBL))
+            existing = source_columns(query_frame, values, qualified, text(source_snapshot.SRC_CONN_ID), text(source_snapshot.STD_DT), text(source_snapshot.OWNER), text(source_snapshot.TBL))
             st.caption(f"원천 구조 · {text(source_snapshot.ENTITY) or '-'} · {len(existing):,} 컬럼")
         except Exception as error:
             st.error(f"원천 레이아웃 조회 실패: {error}", icon=":material/error:")
@@ -402,10 +415,16 @@ def render_single(maps: pd.DataFrame, values: dict[str, Any], schema_name: str, 
         with basic:
             prj_cd = st.text_input("프로젝트코드", value=form_value(current, "PRJ_CD"))
             sbj_area_cd = st.text_input("주제영역코드", value=form_value(current, "SBJ_AREA_CD"))
-            src_conn_id = st.text_input("원천접속ID", value=form_value(current, "SRC_CONN_ID", "SRC_GP"), disabled=current is None)
+            if source_snapshot is not None:
+                src_conn_id = text(source_snapshot.SRC_CONN_ID).upper()
+                st.text_input("원천접속ID", value=connection_label(source_connections, src_conn_id), disabled=True)
+            else:
+                source_default = form_value(current, "SRC_CONN_ID", text(source_connections.iloc[0].conn_id)).upper()
+                src_conn_id = st.selectbox("원천접속ID", source_connections.conn_id.tolist(), index=source_connections.conn_id.tolist().index(source_default) if source_default in source_connections.conn_id.tolist() else 0, format_func=lambda value: connection_label(source_connections, value))
             src_sch_nm = st.text_input("원천스키마명", value=text(source_snapshot.OWNER) if source_snapshot is not None else form_value(current, "SRC_SCH_NM"), disabled=True)
             src_tbl_nm = st.text_input("원천테이블명", value=text(source_snapshot.TBL) if source_snapshot is not None else form_value(current, "SRC_TBL_NM"), disabled=True)
-            tgt_conn_id = st.text_input("대상접속ID", value=form_value(current, "TGT_CONN_ID", "TGT_RED"))
+            target_default = form_value(current, "TGT_CONN_ID", text(target_connections.iloc[0].conn_id)).upper()
+            tgt_conn_id = st.selectbox("대상접속ID", target_connections.conn_id.tolist(), index=target_connections.conn_id.tolist().index(target_default) if target_default in target_connections.conn_id.tolist() else 0, format_func=lambda value: connection_label(target_connections, value))
             tgt_sch_nm = st.text_input("대상스키마명", value=form_value(current, "TGT_SCH_NM"))
             tgt_tbl_nm = st.text_input("대상테이블명", value=form_value(current, "TGT_TBL_NM"))
         with execution:
@@ -421,7 +440,7 @@ def render_single(maps: pd.DataFrame, values: dict[str, Any], schema_name: str, 
         submitted = st.form_submit_button("테이블·컬럼 매핑 저장", icon=":material/save:", type="primary")
     if automatic:
         try:
-            target_structure = target_columns(query_frame, values, text(tgt_sch_nm), text(tgt_tbl_nm))
+            target_structure = target_columns(query_frame, runtime_connection_values(target_connections, tgt_conn_id), text(tgt_sch_nm), text(tgt_tbl_nm))
             converted, matched = automatic_columns(existing, target_structure)
             st.session_state[automatic_key] = converted
             st.toast(f"대상 컬럼 {matched:,}건을 자동 반영했습니다.", icon=":material/auto_fix_high:")
