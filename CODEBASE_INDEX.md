@@ -7,8 +7,8 @@
 | 문서 | 책임 |
 | --- | --- |
 | `CODEBASE_INDEX.md` | 저장소 앱·폴더·실행 진입점 인덱스 |
-| `10.Gp2Red/README.md` | 전체 메뉴트리, 최초 투입, 권한, 원천 수집·대상 매핑, 가상 검증 기준 |
-| `PC_REBUILD_GUIDE.md` | 새 Windows PC의 개발 환경 복원 절차 |
+| `10.Gp2Red/README.md` | 이관 관리 메뉴, 최초 투입, 접속·권한·매핑, 검증 기준 |
+| `PC_REBUILD_GUIDE.md` | 새 Windows PC의 개발 환경·비밀 설정·이관 메타 복원 절차 |
 
 연결 비밀값은 PC별 `.streamlit/secrets.toml`에만 관리하며 Git과 문서에 기록하지 않습니다.
 

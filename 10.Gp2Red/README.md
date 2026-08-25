@@ -46,7 +46,7 @@
 3. DBA가 만든 메타데이터 스키마를 준비합니다. `SrcTgtOrchestrator.py`를 처음 실행하면 초기 설정 화면이 열립니다. 기존 메타가 있으면 먼저 `메타데이터 백업`을 눌러 `테이블명_YYYYMMDD` CTAS 백업을 만들고, 스키마명을 입력한 뒤 `메타 생성`을 누릅니다. 이 작업은 메타 테이블·사용자·이력을 다시 만듭니다.
 4. 아래 가상 테스트를 실행합니다. 실패하면 실제 화면을 열거나 실제 DDL을 적용하지 않습니다.
 5. 생성이 끝나면 초기 관리자 계정으로 로그인하고 즉시 비밀번호를 바꿉니다.
-6. `👤 사용자`에서 운영자 계정을 만들고 그룹·프로젝트·주제영역 범위를 지정합니다.
+6. `👤 관리 > 사용자`에서 운영자 계정을 만들고 그룹·프로젝트·주제영역 범위를 지정합니다.
 7. `👤 관리 > 접속`에서 원천·대상 접속을 등록합니다. 접속 ID별로 DBMS, Secrets 섹션명, Airflow 접속 ID만 등록합니다.
 8. `🗂️ 주제영역`에서 프로젝트의 상위·실행 주제영역, 이름, 표시 순서와 사용 여부를 입력합니다.
 9. `구조조회 > 원천 레이아웃`에서 원천 접속과 스키마를 선택하여 기준일 레이아웃을 적재하고 비교합니다.
@@ -101,7 +101,8 @@
 
 ```powershell
 python 10.Gp2Red\tests\virtual_workflow_test.py -v
-python -m py_compile 10.Gp2Red\app\*.py 10.Gp2Red\dag\common\mig_step_runtime.py
+Get-ChildItem 10.Gp2Red\app -Filter *.py | ForEach-Object { python -m py_compile $_.FullName }
+python -m py_compile 10.Gp2Red\dag\common\mig_step_runtime.py
 ```
 
 가상 테스트는 접속·권한·실제 테이블 데이터까지 보증하지 않습니다. 실제 투입은 단일 테이블, 병렬도 1, 별도 작업일자로 시작하고 COUNT·HASH 검증과 실행 이력을 확인한 뒤 범위를 넓힙니다.

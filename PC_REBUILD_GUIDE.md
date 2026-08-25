@@ -60,10 +60,12 @@ git check-ignore -v .streamlit\secrets.toml
 | 도구 | 설정 섹션 |
 | --- | --- |
 | Oracle DDL, MSSQL-Oracle 레이아웃·건수·상황판 | `[oracle]`, 필요 시 `[mssql]` |
-| 원천·대상 이관 관리 | `[greenplum]`, `[redshift_sql]`, `[migration_metadata]`, 선택 `[migration_monitor]`, `[layout_history]` |
+| 원천·대상 이관 관리 | `[migration_metadata]`, 메타 저장소용 `[redshift_sql]`, 접속관리에서 등록한 원천·대상별 Secrets 섹션, 선택 `[migration_monitor]`, `[layout_history]` |
 | Redshift 스냅샷 복구 | `[redshift]`, `redshift.targets.<이름>` |
 
-원천·대상 이관의 DB 연결 섹션에는 `host`, `port`, `database`, `user`, `password`가 필요합니다. `[migration_metadata]`는 메타데이터 연결 섹션과 스키마를 지정하며, 고객 현황용 `[migration_monitor]`는 조회 전용 연결 섹션을 지정합니다.
+원천·대상 이관의 DB 연결 섹션에는 `host`, `port`, `database`, `user`, `password`가 필요합니다. `[migration_metadata]`는 메타데이터 연결 섹션과 스키마를 지정하며, 고객 현황용 `[migration_monitor]`는 조회 전용 연결 섹션을 지정합니다. 프로그램 초기화 뒤 `👤 관리 > 접속`에서 각 원천·대상 접속의 Secrets 섹션명과 Airflow 접속 ID를 등록합니다. 실제 비밀번호는 메타 테이블에 입력하지 않습니다.
+
+기존 이관 메타를 유지하는 PC는 초기화 화면을 다시 실행하지 말고 `10.Gp2Red\sql\02_mig_connection_migration.sql`을 메타 스키마에 한 번 적용합니다. 스키마명이 `MIG_META`가 아니면 실행 전에 스키마명만 치환합니다.
 
 MSSQL ODBC 드라이버 이름은 다음으로 확인합니다.
 
@@ -76,11 +78,12 @@ python -c "import pyodbc; print(pyodbc.drivers())"
 ```powershell
 python -m py_compile OracleDdlStudio.py MssqlOracleLayoutDiff.py MssqlOracleCountCheck.py MssqlOracleServerMonitor.py RedshiftSnapshotTableRestore.py
 Get-ChildItem 10.Gp2Red\app -Filter *.py | ForEach-Object { python -m py_compile $_.FullName }
+python 10.Gp2Red\tests\virtual_workflow_test.py -v
 python -m streamlit run 10.Gp2Red\app\SrcTgtOrchestrator.py
 python -m streamlit run 10.Gp2Red\app\SrcTgtMonitor.py --server.port 8502
 ```
 
-`py_compile`은 문법만 검사합니다. 로컬 사용자 로그인, DB 연결, Airflow, S3, 실제 이관은 운영 접근 권한으로 별도 확인해야 합니다.
+`py_compile`은 문법만 검사합니다. 가상 테스트는 접속정보 없이 메타·접속관리·레이아웃·DAG·로그 흐름을 확인합니다. 로컬 사용자 로그인, DB 연결, Airflow, S3, 실제 이관은 운영 접근 권한으로 별도 확인해야 합니다.
 
 ## 6. 일상 동기화와 장애 확인
 
