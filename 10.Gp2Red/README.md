@@ -2,6 +2,67 @@
 
 이 문서는 이관 프로젝트를 처음 투입하는 운영자의 실행 순서입니다. 실제 접속 정보는 `.streamlit/secrets.toml`에만 두며, 문서와 Git에는 기록하지 않습니다.
 
+## 설치 기준과 역할 분리
+
+이관 관리는 **관리 PC의 Streamlit 화면**, **메타데이터 DB**, **Airflow 실행 환경**으로 나뉩니다. 관리 화면은 메타를 관리하고 DAG Python을 생성합니다. 생성한 DAG의 배포·스케줄·실행은 Airflow가 담당합니다. 관리 화면에서 Airflow에 직접 배포하거나 실행하지 않습니다.
+
+| 구분 | 준비 항목 | 운영자가 확인할 내용 |
+| --- | --- | --- |
+| 관리 PC | Windows 64비트, Python 3.12 권장 | 이 도구의 최소 Python은 3.11입니다. Python 3.11 미만에는 `tomllib`가 없어 실행할 수 없습니다. |
+| 관리 PC | Git | 소스 내려받기와 변경 이력 관리에 사용합니다. 이미 배포된 소스를 받았다면 필수는 아닙니다. |
+| 관리 PC | `requirements.txt` 패키지 | Streamlit 화면, Redshift·Greenplum 접속, Excel 산출물 생성에 사용합니다. 이 저장소 공통 파일이므로 Oracle·MSSQL용 패키지도 함께 설치됩니다. |
+| 관리 PC | 메타·원천·대상 DB 네트워크 권한 | 관리 화면은 메타DB에 접속하고, 구조조회·검증은 선택한 원천·대상 접속에 접속합니다. |
+| Airflow 환경 | Airflow가 지원하는 별도 Python 환경 | Airflow, `pendulum`, `psycopg`와 실제 추출·적재 실행기 모듈을 Airflow 운영 기준으로 설치합니다. 관리 PC의 가상환경을 복사하지 않습니다. |
+| Airflow 환경 | Connection, DAG·SQL·로그 경로 권한 | 메타DB Connection, 원천·대상 Connection, DAG 배포 폴더 및 SQL·로그 폴더 쓰기 권한을 확인합니다. |
+
+Greenplum·Redshift 이관 관리만 사용할 때에는 별도 ODBC 드라이버나 Oracle Client가 필요하지 않습니다. `psycopg[binary]`가 PostgreSQL 계열 접속을 담당합니다. 단, 같은 PC에서 다른 저장소 도구도 실행하면 그 도구가 요구하는 드라이버는 별도로 필요합니다.
+
+### 관리 PC 최초 설치
+
+PowerShell에서 저장소 루트에서 실행합니다. 설치된 Python 목록을 먼저 보고, 권장 버전이 없으면 Python 3.12 64비트를 설치한 뒤 진행합니다.
+
+```powershell
+py -0p
+py -3.12 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -r requirements.txt
+python -m pip check
+python -c "import sys, streamlit, psycopg; print(sys.executable); print(sys.version); print(streamlit.__version__); print(psycopg.__version__)"
+```
+
+`py -3.12`을 찾을 수 없으면 설치된 3.11 이상 버전으로 바꾸어 실행합니다. `python`과 `py`가 서로 다른 Python을 가리키면 패키지 오류가 발생하므로, 가상환경을 활성화한 뒤에는 모든 명령을 `python -m ...` 형식으로 실행합니다.
+
+### 비밀 설정과 접속 메타의 관계
+
+실제 `.streamlit/secrets.toml`은 Git 제외 파일입니다. 저장소의 `.streamlit/secrets.toml.example`을 복사해 PC별로 만들고, 실제 값은 DBA·인프라 담당자가 입력합니다. 화면 또는 메타 테이블에는 비밀번호를 저장하지 않습니다.
+
+```text
+secrets.toml의 접속 섹션
+        ↓
+TB_MIG_CONN.SEC_SECT_NM
+        ↓
+테이블 매핑의 SRC_CONN_ID / TGT_CONN_ID
+
+Airflow Connection
+        ↑
+TB_MIG_CONN.AF_CONN_ID
+```
+
+`SEC_SECT_NM`은 관리 화면·구조조회·검증이 읽는 접속 섹션명이고, `AF_CONN_ID`는 생성된 DAG가 Airflow에서 읽는 접속 ID입니다. 같은 접속을 가리키더라도 둘은 각 환경의 설정이므로 별도로 등록·점검합니다. 관리 화면의 비밀 설정은 Airflow로 자동 복사되지 않습니다.
+
+### 모델러가 알아둘 운영 용어
+
+| 용어 | 이 도구에서의 의미 | 운영 판단 |
+| --- | --- | --- |
+| 상위 주제영역 | ODS, DW, DM처럼 업무를 묶는 분류 | 진행률 집계와 화면 분류에 사용합니다. |
+| 실행 주제영역 | 상위 주제영역 아래 실제 이관 단위 | 실행 주제영역 1건이 DAG 1건입니다. 테이블 수가 많으면 실행 주제영역을 나누어 관리합니다. |
+| DAG | Airflow가 실행하는 작업 흐름 Python | 이 도구는 생성만 하며 Airflow 배포·스케줄은 별도 운영입니다. |
+| 메타데이터 | 접속, 주제영역, 테이블·컬럼 매핑, 실행 이력을 저장한 이관 관리 정보 | 원천·대상 업무 데이터가 아닙니다. 초기화 대상은 이 메타 영역뿐입니다. |
+| 원천 레이아웃 기준일 | 특정 일시에 수집한 원천 테이블·컬럼 구조 | 직전 기준일과 비교해 변경분을 확인한 뒤 매핑을 보정합니다. |
+| 대상 반영안 | 원천 레이아웃과 대상 매핑으로 만든 Redshift 물리설계·DDL 초안 | DBA 검토용입니다. 화면에서 대상 DDL을 실행하거나 승인하지 않습니다. |
+| 실행기 모듈 | DAG의 실제 추출·적재 코드를 제공하는 Airflow Python 모듈 | `MIG_EXECUTOR_MODULE`과 `run_extract`, `run_load`가 없으면 DAG는 실패 로그를 남기고 중단합니다. |
+
 ## 전체 메뉴 트리
 
 ```text
@@ -41,18 +102,19 @@
 
 ## 최초 투입 순서
 
-1. 실행 PC에 Python, Streamlit, 요구 패키지와 Greenplum·Redshift 접속 드라이버를 준비합니다.
-2. `.streamlit/secrets.toml`에 Greenplum, Redshift 연결을 설정합니다. 실제 값은 이 문서에 쓰지 않습니다.
-3. DBA가 만든 메타데이터 스키마를 준비합니다. `SrcTgtOrchestrator.py`를 처음 실행하면 초기 설정 화면이 열립니다. 기존 메타가 있으면 먼저 `메타데이터 백업`을 눌러 `테이블명_YYYYMMDD` CTAS 백업을 만들고, 스키마명을 입력한 뒤 `메타 생성`을 누릅니다. 이 작업은 메타 테이블·사용자·이력을 다시 만듭니다.
-4. 아래 가상 테스트를 실행합니다. 실패하면 실제 화면을 열거나 실제 DDL을 적용하지 않습니다.
+1. 관리 PC에 권장 Python과 요구 패키지를 설치하고, 아래 가상 테스트를 실행합니다. 실패하면 실제 화면을 열거나 실제 DDL을 적용하지 않습니다.
+2. DBA가 메타데이터용 Redshift 스키마를 생성하고, 이관 운영자에게 그 스키마의 생성·조회·변경 권한을 부여합니다.
+3. `.streamlit/secrets.toml`에 메타DB 접속 섹션과 원천·대상 접속 섹션을 설정합니다. 실제 값은 이 문서에 쓰지 않습니다.
+4. `SrcTgtOrchestrator.py`를 처음 실행합니다. 초기 설정 화면에서 메타 스키마를 확인한 뒤 `메타 생성`을 실행합니다. 기존 메타가 있으면 먼저 `메타데이터 백업`을 눌러 `테이블명_YYYYMMDD` CTAS 백업을 만듭니다. 메타 생성은 이관 메타 테이블·뷰·사용자·이력만 다시 만듭니다.
 5. 생성이 끝나면 초기 관리자 계정으로 로그인하고 즉시 비밀번호를 바꿉니다.
 6. `👤 관리 > 사용자`에서 운영자 계정을 만들고 그룹·프로젝트·주제영역 범위를 지정합니다.
 7. `👤 관리 > 접속`에서 원천·대상 접속을 등록합니다. 접속 ID별로 DBMS, Secrets 섹션명, Airflow 접속 ID만 등록합니다.
-8. `🗂️ 주제영역`에서 프로젝트의 상위·실행 주제영역, 이름, 표시 순서와 사용 여부를 입력합니다.
+8. `🗂️ 주제영역`에서 상위·실행 주제영역, 이름, 표시 순서와 사용 여부를 입력합니다. 실행 단위를 분리하려면 실행 주제영역을 나눕니다.
 9. `구조조회 > 원천 레이아웃`에서 원천 접속과 스키마를 선택하여 기준일 레이아웃을 적재하고 비교합니다.
 10. `🔗 매핑`에서 적재한 원천 레이아웃을 선택하고 대상 접속·테이블·컬럼 설계를 작성합니다.
 11. `구조조회 > 대상 반영안`에서 원천 기준일과 대상 매핑을 비교하고 물리설계·DDL을 확인한 뒤 DAG를 생성합니다.
-12. Airflow 실행 후 실행 이력, 검증, 산출물, 고객 현황 순서로 확인합니다.
+12. 생성한 DAG Python과 `dag/common` 실행 래퍼를 Airflow 운영자가 배포합니다. Airflow Connection, SQL·로그 경로, 실행기 모듈을 먼저 점검한 뒤 Airflow에서 실행합니다.
+13. Airflow 실행 후 실행 이력, 검증, 산출물, 고객 현황 순서로 확인합니다.
 
 초기 설정이 저장하는 것은 스키마명뿐이며 `.streamlit/migration_setup.toml`에 PC별로 보관됩니다. 이 파일과 실제 연결 비밀값은 Git에 포함하지 않습니다.
 
@@ -93,7 +155,7 @@
 | `TB_MIG_RUN_LOG` | EXTRACT·LOAD 실행 단계와 처리량·상태 |
 | `TB_MIG_ARTF_ITEM` | 산출물 항목명·표시 순서·출력 여부 |
 
-실행 주제영역의 `사용` 여부가 DAG 생성·실행 여부를 함께 제어합니다. DAG 별도 사용 여부는 두지 않습니다. 테이블별 선후행·병렬 그룹·테이블별 병렬 조건처럼 현재 실행기가 해석하지 않는 메타 컬럼은 정리 대상입니다.
+실행 주제영역의 `사용` 여부가 DAG 생성 대상 여부를 제어합니다. 현재 설계는 실행 주제영역 1건당 DAG 1건이며, 별도의 DAG 분할 관리 화면은 두지 않습니다. 테이블 수를 분리해야 하면 실행 주제영역을 나누어 관리합니다. 테이블별 선후행·병렬 그룹·테이블별 병렬 조건처럼 현재 실행기가 해석하지 않는 메타 컬럼은 정리 대상입니다.
 
 ## 가상 테스트
 
@@ -106,6 +168,29 @@ python -m py_compile 10.Gp2Red\dag\common\mig_step_runtime.py
 ```
 
 가상 테스트는 접속·권한·실제 테이블 데이터까지 보증하지 않습니다. 실제 투입은 단일 테이블, 병렬도 1, 별도 작업일자로 시작하고 COUNT·HASH 검증과 실행 이력을 확인한 뒤 범위를 넓힙니다.
+
+## Airflow 배포 전 점검
+
+생성 화면의 `Python 문법 검증 완료`는 생성된 파일의 문법만 확인한 결과입니다. Airflow 배포·파싱·접속·실제 추출·적재 성공을 뜻하지 않습니다. 다음 순서로 배포합니다.
+
+1. 생성한 `dag/mig_{실행주제영역}.py`와 `dag/common` 폴더를 Airflow DAG 배포 경로에 반영합니다.
+2. Airflow에 메타DB Connection을 만들고 `MIG_META_CONN_ID`가 그 ID를 가리키도록 설정합니다. 지정하지 않으면 기본값 `TGT_RED`을 사용합니다.
+3. `TB_MIG_CONN.AF_CONN_ID`에 등록한 원천·대상 Airflow Connection을 Airflow에도 같은 ID로 생성합니다.
+4. `MIG_SQL_ROOT`, `MIG_LOG_ROOT`가 Airflow 작업 계정에서 생성·쓰기 가능한 경로인지 확인합니다.
+5. 실제 이관 코드를 담은 실행기 모듈을 Airflow Python 경로에 배포하고 `MIG_EXECUTOR_MODULE`에 모듈명을 설정합니다. 모듈에는 `run_extract(record)`와 `run_load(record)` 함수가 있어야 합니다.
+6. Airflow 화면에서 DAG 파싱 오류가 없는지 확인한 뒤, 단일 테이블·병렬도 1로 수동 실행합니다. `EXTRACT` 성공 이후에만 `LOAD`가 수행되는지와 `TB_MIG_RUN_LOG` 및 파일 로그를 함께 확인합니다.
+
+실행기 모듈은 이 저장소에 아직 제공하지 않습니다. 따라서 현재 산출물은 메타 관리, DAG 생성, 검증·산출물, 로그 조회까지이며 실제 데이터 추출·적재는 Airflow 실행기 구현과 배포 후에 가능합니다.
+
+## 자주 혼동하는 범위
+
+| 항목 | 이 도구가 하는 일 | 이 도구가 하지 않는 일 |
+| --- | --- | --- |
+| 메타 생성 | 이관 메타 테이블·뷰를 생성하고 초기 사용자를 준비 | 메타 스키마 자체 생성, 업무 테이블 삭제 |
+| 대상 DDL | 매핑 기준 DDL 초안을 만들고 저장 | 대상 DB에 DDL 실행·승인·배포 |
+| DAG | 주제영역별 Python 생성, 문법 검사 | Airflow 배포, 스케줄 등록, 실제 실행 |
+| 실행 로그 | Airflow DAG가 입력한 EXTRACT·LOAD 로그를 조회·집계 | Airflow의 자체 실행 로그를 대체 |
+| 검증 | COUNT와 선택 SUM·HASH 결과를 조회·산출 | 적재 DAG의 성공 여부를 대신 판정 |
 
 초기 설정은 이관 전용 메타 테이블만 삭제·재생성합니다. 대상 업무 테이블이나 스키마 삭제는 수행하지 않습니다.
 

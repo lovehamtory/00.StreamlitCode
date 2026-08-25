@@ -152,6 +152,10 @@ def apply_operations_style() -> None:
         .ops-card { height: 102px; box-sizing: border-box; display: flex; flex-direction: column; justify-content: center; gap: 14px; padding: 16px; background: rgba(16, 33, 56, .9); border: 1px solid #254d73; border-radius: 10px; }
         .ops-card-label { color: #c9dcef; font-size: 16px; font-weight: 720; line-height: 1; letter-spacing: -.01em; }
         .ops-card-value { color: #f4f8fd; font-size: 16px; font-weight: 780; line-height: 1; letter-spacing: -.01em; white-space: nowrap; }
+        .ops-card-alert .ops-card-value { color: #ff8d97; }
+        .ops-card-result { font-size: 14px; }
+        .ops-card-success { color: #69e393; }
+        .ops-card-failure { color: #ff8d97; }
         .ops-section-title { display: flex; align-items: center; gap: 7px; padding-bottom: 0; color: #f1f7ff; font-size: 16px; font-weight: 780; line-height: 1; }
         .ops-section-icon { color: #6fc4ff; font-size: 16px; }
         .ops-system-title { color: #dceeff; font-size: 14px; font-weight: 760; line-height: 1; }
@@ -195,17 +199,19 @@ def render_operations_header() -> None:
     )
 
 
-def snapshot_card(label: str, value: str) -> str:
+def snapshot_card(label: str, value: str, card_class: str = "") -> str:
     return (
-        f'<div class="ops-card"><div class="ops-card-label">{label}</div>'
+        f'<div class="ops-card {card_class}"><div class="ops-card-label">{label}</div>'
         f'<div class="ops-card-value">{value}</div></div>'
     )
 
 
-def render_card_row(cards: tuple[tuple[str, str], ...]) -> None:
-    for column, card in zip(st.columns(6, gap="small"), cards):
+def render_card_row(cards: tuple[tuple[str, str], ...], card_classes: tuple[str, ...] | None = None) -> None:
+    classes = card_classes or ()
+    for index, (column, card) in enumerate(zip(st.columns(len(cards), gap="small"), cards)):
         with column:
-            st.markdown(snapshot_card(card[0], card[1]), unsafe_allow_html=True)
+            card_class = classes[index] if index < len(classes) else ""
+            st.markdown(snapshot_card(card[0], card[1], card_class), unsafe_allow_html=True)
 
 
 def render_section_title(icon: str, title: str, container: Any | None = None) -> None:
@@ -219,6 +225,38 @@ def render_section_title(icon: str, title: str, container: Any | None = None) ->
 def render_fixed_gap(pixels: int, container: Any | None = None) -> None:
     target = st if container is None else container
     target.space(pixels)
+
+
+def target_card_value(table_count: int, results: pd.DataFrame) -> str:
+    if results.empty:
+        return f"{table_count:,}건"
+    success_count = int(results["검증결과"].eq("성공").sum())
+    failure_count = int(results["검증결과"].eq("실패").sum())
+    failure_class = "ops-card-failure" if failure_count else ""
+    return (
+        f'{table_count:,}건 <span class="ops-card-result">['
+        f'<span class="ops-card-success">{success_count:,}</span> / '
+        f'<span class="{failure_class}">{failure_count:,}</span>]</span>'
+    )
+
+
+def render_target_dashboard(mappings: pd.DataFrame, results: pd.DataFrame) -> None:
+    with st.container(border=True, gap=None):
+        render_section_title("▦", "검증 대상")
+        render_fixed_gap(20)
+        database_counts = mappings.groupby("SRC_SYSTEM").size().sort_index()
+        cards = tuple(
+            (
+                f"▣ {database}",
+                target_card_value(
+                    int(table_count),
+                    results.loc[results["소스DB"].eq(database)] if not results.empty else results,
+                ),
+            )
+            for database, table_count in database_counts.items()
+        )
+        render_card_row(cards)
+        render_fixed_gap(20)
 
 
 def render_operations_snapshot(summary: dict[str, Any] | None, target_count: int = 0) -> None:
@@ -238,7 +276,10 @@ def render_operations_snapshot(summary: dict[str, Any] | None, target_count: int
         ("⇄ 불일치", f"{mismatch_count_value:,}건"),
         ("⚠ 오류", f"{error_count_value:,}건"),
     )
-    render_card_row(cards)
+    render_card_row(
+        cards,
+        ("", "", "", "", "ops-card-alert" if mismatch_count_value else "", "ops-card-alert" if error_count_value else ""),
+    )
 
 
 @st.cache_resource(show_spinner=False)
@@ -933,13 +974,7 @@ def main() -> None:
     if not mappings.empty:
         render_fixed_gap(38, snapshot_target_gap_slot)
         with target_slot.container():
-            with st.container(border=True, gap=None):
-                render_section_title("▦", "검증 대상")
-                render_fixed_gap(20)
-                database_counts = mappings.groupby("SRC_SYSTEM").size().sort_index()
-                target_cards = tuple((f"▣ {database}", f"{table_count:,}건") for database, table_count in database_counts.items())
-                render_card_row(target_cards)
-                render_fixed_gap(20)
+            render_target_dashboard(mappings, st.session_state.countcheck_results)
         render_fixed_gap(38, target_progress_gap_slot)
     else:
         snapshot_target_gap_slot.empty()
@@ -971,6 +1006,8 @@ def main() -> None:
             st.session_state.countcheck_summary = summary
             with snapshot_slot.container():
                 render_operations_snapshot(summary, len(mappings))
+            with target_slot.container():
+                render_target_dashboard(mappings, result_frame)
             st.toast("검증이 완료되었습니다.", icon=":material/check_circle:")
         except Exception as exc:
             st.error(str(exc), icon=":material/error:")

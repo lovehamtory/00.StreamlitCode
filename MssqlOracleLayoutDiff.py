@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 import re
 from dataclasses import dataclass
+from decimal import Decimal, InvalidOperation
 from datetime import datetime
 from io import BytesIO
 from time import perf_counter
@@ -14,6 +15,7 @@ import streamlit as st
 
 
 DEFAULT_LAYOUT_TABLE = "TB_TABLE_LAYOUT_TLP"
+MIGRATION_MAPPING_TABLE = "TB_MIG_TABLE_INFO"
 DEFAULT_TARGET_OWNER = "PCERP_RENTALAPP_MIG"
 DEFAULT_TABLESPACE = "PCERP_MIG_DATA"
 DEFAULT_INDEX_TABLESPACE = "PCERP_MIG_INEX"
@@ -61,6 +63,7 @@ def init_state() -> None:
         "ddl_artifact": None,
         "ddl_logs": None,
         "selected_owner": None,
+        "migration_sync_logs": None,
     }
     for key, value in defaults.items():
         st.session_state.setdefault(key, value)
@@ -172,6 +175,15 @@ def fallback_target_table(owner: str, table: str) -> str:
 
 def target_table_name(owner: str, table: str) -> str:
     return fallback_target_table(owner, table)
+
+
+def migration_target_tables(table_changes: pd.DataFrame) -> list[str]:
+    return sorted(
+        {
+            target_table_name(normalized(row["DB"]), normalized(row["테이블"]))
+            for _, row in table_changes.iterrows()
+        }
+    )
 
 
 def is_not_null(value: object) -> bool:
@@ -795,6 +807,230 @@ def column_mapping_excel_bytes(frame: pd.DataFrame) -> bytes:
     return output.getvalue()
 
 
+def fetch_migration_mapping_rows(target_tables: list[str]) -> pd.DataFrame:
+    columns = ["SRC_SYSTEM", "SRC_TABLE", "SRC_ENTITY", "SRC_COLNO", "SRC_COLUMN", "TGT_TABLE", "TGT_COLUMN", "JB_GRP", "MIG_YN", "KTR"]
+    if not target_tables:
+        return pd.DataFrame(columns=columns)
+    rows: list[tuple[object, ...]] = []
+    owner = sql_name(DEFAULT_TARGET_OWNER)
+    table = sql_name(MIGRATION_MAPPING_TABLE)
+    with get_pool().acquire() as conn:
+        with conn.cursor() as cursor:
+            for start in range(0, len(target_tables), 900):
+                names = target_tables[start : start + 900]
+                bind_names = [f"table_{index}" for index in range(len(names))]
+                bind_sql = ", ".join(f":{name}" for name in bind_names)
+                cursor.execute(
+                    f"""
+                    SELECT SRC_SYSTEM, SRC_TABLE, SRC_ENTITY, SRC_COLNO, SRC_COLUMN,
+                           TGT_TABLE, TGT_COLUMN, JB_GRP, MIG_YN, KTR
+                      FROM {owner}.{table}
+                     WHERE TGT_TABLE IN ({bind_sql})
+                    """,
+                    dict(zip(bind_names, names)),
+                )
+                rows.extend(cursor.fetchall())
+    result = pd.DataFrame(rows, columns=columns)
+    return result.sort_values(["TGT_TABLE", "TGT_COLUMN", "SRC_COLNO"]).reset_index(drop=True) if not result.empty else result
+
+
+def jb_group_number(value: object) -> Decimal:
+    try:
+        return Decimal(clean_text(value))
+    except (InvalidOperation, ValueError) as exc:
+        raise ValueError(f"JB_GRP 숫자값이 올바르지 않습니다: {value}") from exc
+
+
+def existing_mapping_defaults(existing_rows: pd.DataFrame) -> tuple[dict[str, Decimal], dict[tuple[str, str], str], dict[tuple[str, str], str]]:
+    jb_groups: dict[str, Decimal] = {}
+    mig_yn_by_column: dict[tuple[str, str], str] = {}
+    ktr_by_column: dict[tuple[str, str], str] = {}
+    if existing_rows.empty:
+        return jb_groups, mig_yn_by_column, ktr_by_column
+    for target_table, group in existing_rows.groupby("TGT_TABLE", sort=False):
+        group_values = {jb_group_number(value) for value in group["JB_GRP"].tolist() if clean_text(value)}
+        if len(group_values) > 1:
+            raise ValueError(f"TB_MIG_TABLE_INFO의 {target_table} JB_GRP 값이 여러 개입니다: {', '.join(str(value) for value in sorted(group_values))}")
+        if group_values:
+            jb_groups[normalized(target_table)] = next(iter(group_values))
+    for _, row in existing_rows.iterrows():
+        key = (normalized(row["TGT_TABLE"]), normalized(row["TGT_COLUMN"]))
+        value = normalized(row["MIG_YN"])
+        previous = mig_yn_by_column.get(key)
+        if previous is not None and previous != value:
+            raise ValueError(f"TB_MIG_TABLE_INFO의 {key[0]}.{key[1]} MIG_YN 값이 일치하지 않습니다.")
+        mig_yn_by_column[key] = value
+        ktr_value = clean_text(row["KTR"])
+        previous_ktr = ktr_by_column.get(key)
+        if previous_ktr is not None and previous_ktr != ktr_value:
+            raise ValueError(f"TB_MIG_TABLE_INFO의 {key[0]}.{key[1]} KTR 값이 일치하지 않습니다.")
+        ktr_by_column[key] = ktr_value
+    return jb_groups, mig_yn_by_column, ktr_by_column
+
+
+def migration_mapping_rows(
+    column_mapping: pd.DataFrame,
+    jb_groups: dict[str, Decimal],
+    mig_yn_by_column: dict[tuple[str, str], str],
+    ktr_by_column: dict[tuple[str, str], str],
+) -> pd.DataFrame:
+    columns = ["SRC_SYSTEM", "SRC_TABLE", "SRC_ENTITY", "SRC_COLNO", "SRC_COLUMN", "TGT_TABLE", "TGT_COLUMN", "JB_GRP", "MIG_YN", "KTR"]
+    rows: list[dict[str, object]] = []
+    for _, row in column_mapping.iterrows():
+        target_table = target_table_name(normalized(row["SRC SYSTEM"]), normalized(row["SRC TBL"]))
+        target_column = normalized(row["TGT COL"])
+        jb_group = jb_groups.get(target_table)
+        if jb_group is None:
+            raise ValueError(f"{target_table}의 JB_GRP 값을 입력해 주십시오.")
+        colno = colno_number(row["SRC COLNO"])
+        if colno == 999999999:
+            raise ValueError(f"{target_table}.{target_column}의 SRC_COLNO 값이 올바르지 않습니다.")
+        rows.append(
+            {
+                "SRC_SYSTEM": normalized(row["SRC SYSTEM"]),
+                "SRC_TABLE": normalized(row["SRC TBL"]),
+                "SRC_ENTITY": clean_text(row["SRC ENT"]),
+                "SRC_COLNO": colno,
+                "SRC_COLUMN": clean_text(row["SRC COL"]),
+                "TGT_TABLE": target_table,
+                "TGT_COLUMN": target_column,
+                "JB_GRP": jb_group,
+                "MIG_YN": mig_yn_by_column.get((target_table, target_column), "N"),
+                "KTR": ktr_by_column.get((target_table, target_column), None),
+            }
+        )
+    return pd.DataFrame(rows, columns=columns)
+
+
+def execute_migration_mapping_sync(target_tables: list[str], mapping_rows: pd.DataFrame) -> pd.DataFrame:
+    owner = sql_name(DEFAULT_TARGET_OWNER)
+    table = sql_name(MIGRATION_MAPPING_TABLE)
+    delete_sql = f"DELETE FROM {owner}.{table} WHERE TGT_TABLE = :target_table"
+    insert_sql = f"""
+        INSERT INTO {owner}.{table} (
+            SRC_SYSTEM, SRC_TABLE, SRC_ENTITY, SRC_COLNO, SRC_COLUMN,
+            TGT_TABLE, TGT_COLUMN, JB_GRP, MIG_YN
+        ) VALUES (
+            :SRC_SYSTEM, :SRC_TABLE, :SRC_ENTITY, :SRC_COLNO, :SRC_COLUMN,
+            :TGT_TABLE, :TGT_COLUMN, :JB_GRP, :MIG_YN
+        )
+    """
+    insert_with_ktr_sql = f"""
+        INSERT INTO {owner}.{table} (
+            SRC_SYSTEM, SRC_TABLE, SRC_ENTITY, SRC_COLNO, SRC_COLUMN,
+            TGT_TABLE, TGT_COLUMN, JB_GRP, MIG_YN, KTR
+        ) VALUES (
+            :SRC_SYSTEM, :SRC_TABLE, :SRC_ENTITY, :SRC_COLNO, :SRC_COLUMN,
+            :TGT_TABLE, :TGT_COLUMN, :JB_GRP, :MIG_YN, :KTR
+        )
+    """
+    with get_pool().acquire() as conn:
+        try:
+            with conn.cursor() as cursor:
+                deleted_count = 0
+                for target_table in target_tables:
+                    cursor.execute(delete_sql, target_table=target_table)
+                    deleted_count += cursor.rowcount
+                without_ktr = mapping_rows[mapping_rows["KTR"].map(clean_text) == ""]
+                with_ktr = mapping_rows[mapping_rows["KTR"].map(clean_text) != ""]
+                if not without_ktr.empty:
+                    cursor.executemany(insert_sql, without_ktr.drop(columns="KTR").to_dict("records"))
+                if not with_ktr.empty:
+                    cursor.executemany(insert_with_ktr_sql, with_ktr.to_dict("records"))
+                conn.commit()
+        except Exception as exc:
+            conn.rollback()
+            raise RuntimeError(f"TB_MIG_TABLE_INFO 반영에 실패하여 전체 작업을 취소했습니다: {exc}") from exc
+    return pd.DataFrame([{"삭제 행 수": deleted_count, "입력 행 수": len(mapping_rows), "대상 테이블 수": len(target_tables)}])
+
+
+def validate_migration_mapping_rows(mapping_rows: pd.DataFrame, target_tables: list[str]) -> pd.DataFrame:
+    columns = ["SRC_SYSTEM", "SRC_TABLE", "SRC_ENTITY", "SRC_COLNO", "SRC_COLUMN", "TGT_TABLE", "TGT_COLUMN", "JB_GRP", "MIG_YN", "KTR"]
+    if list(mapping_rows.columns) != columns:
+        raise ValueError("TB_MIG_TABLE_INFO 반영 그리드의 컬럼 구성이 올바르지 않습니다.")
+    result = mapping_rows.copy()
+    for column in ("SRC_SYSTEM", "SRC_TABLE", "TGT_TABLE", "TGT_COLUMN", "MIG_YN"):
+        result[column] = result[column].map(normalized)
+    for column in ("SRC_ENTITY", "SRC_COLUMN", "KTR"):
+        result[column] = result[column].map(clean_text)
+    result["SRC_COLNO"] = result["SRC_COLNO"].map(colno_number)
+    result["JB_GRP"] = result["JB_GRP"].map(jb_group_number)
+    if result["SRC_COLNO"].eq(999999999).any():
+        raise ValueError("SRC_COLNO는 숫자로 입력해 주십시오.")
+    if not result["TGT_TABLE"].isin(target_tables).all():
+        raise ValueError("선택한 TGT_TABLE 범위를 벗어난 행은 반영할 수 없습니다.")
+    if result[["SRC_SYSTEM", "SRC_TABLE", "TGT_COLUMN"]].eq("").any().any():
+        raise ValueError("SRC_SYSTEM, SRC_TABLE, TGT_COLUMN은 비워 둘 수 없습니다.")
+    if not result["MIG_YN"].isin({"Y", "N"}).all():
+        raise ValueError("MIG_YN은 Y 또는 N으로 입력해 주십시오.")
+    for target_table, group in result.groupby("TGT_TABLE", sort=False):
+        if group["JB_GRP"].nunique() != 1:
+            raise ValueError(f"{target_table}의 JB_GRP는 하나의 숫자값으로 동일해야 합니다.")
+    return result
+
+
+def render_migration_mapping_sync(table_changes: pd.DataFrame, column_mapping: pd.DataFrame) -> None:
+    target_tables = migration_target_tables(table_changes)
+    if not target_tables:
+        return
+    try:
+        existing_rows = fetch_migration_mapping_rows(target_tables)
+        existing_jb_groups, existing_mig_yn, existing_ktr = existing_mapping_defaults(existing_rows)
+    except Exception as exc:
+        st.error(str(exc))
+        return
+    mapping_target_tables = sorted({target_table_name(normalized(row["SRC SYSTEM"]), normalized(row["SRC TBL"])) for _, row in column_mapping.iterrows()})
+    jb_groups = existing_jb_groups.copy()
+    for target_table in mapping_target_tables:
+        jb_groups.setdefault(target_table, Decimal("6"))
+    summary = pd.DataFrame(
+        [
+            {
+                "TGT TABLE": target_table,
+                "기존 매핑": int((existing_rows["TGT_TABLE"].map(normalized) == target_table).sum()) if not existing_rows.empty else 0,
+                "입력 매핑": int(sum(target_table_name(normalized(row["SRC SYSTEM"]), normalized(row["SRC TBL"])) == target_table for _, row in column_mapping.iterrows())),
+                "JB_GRP": jb_groups.get(target_table, ""),
+            }
+            for target_table in target_tables
+        ]
+    )
+    st.caption("선택한 TGT_TABLE의 기존 행을 모두 삭제한 뒤 현재 컬럼 매핑으로 재입력합니다. 기존 JB_GRP·MIG_YN·KTR은 유지하며, 신규 JB_GRP는 숫자 6, 신규 MIG_YN은 N, 신규 KTR은 입력하지 않습니다.")
+    st.dataframe(summary, hide_index=True, height=260, column_config=thousand_number_columns(summary))
+    try:
+        preview_rows = migration_mapping_rows(column_mapping, jb_groups, existing_mig_yn, existing_ktr)
+        preview_rows["JB_GRP"] = preview_rows["JB_GRP"].map(float)
+    except Exception as exc:
+        st.error(str(exc))
+        return
+    with st.form("migration_mapping_sync_form", border=True):
+        edited_rows = st.data_editor(
+            preview_rows,
+            hide_index=True,
+            disabled=["SRC_SYSTEM", "SRC_TABLE", "TGT_TABLE"],
+            height=420,
+            key="migration_mapping_sync_editor",
+            column_config={
+                "SRC_COLNO": st.column_config.NumberColumn("SRC_COLNO", min_value=1, step=1, format="%d"),
+                "JB_GRP": st.column_config.NumberColumn("JB_GRP", min_value=0, step=0.1, format="%.1f"),
+                "MIG_YN": st.column_config.SelectboxColumn("MIG_YN", options=["Y", "N"]),
+            },
+        )
+        confirmed = st.checkbox("표시된 TGT_TABLE의 기존 TB_MIG_TABLE_INFO 행을 삭제하고 재입력하는 것을 확인했습니다.", key="migration_mapping_sync_confirm")
+        submitted = st.form_submit_button("TB_MIG_TABLE_INFO 반영", type="primary", icon=":material/save:")
+    if not submitted:
+        return
+    try:
+        mapping_rows = validate_migration_mapping_rows(edited_rows, target_tables)
+        if not confirmed:
+            raise ValueError("삭제 및 재입력 확인을 선택해 주십시오.")
+        st.session_state.migration_sync_logs = execute_migration_mapping_sync(target_tables, mapping_rows)
+        st.success("TB_MIG_TABLE_INFO 반영을 완료했습니다.", icon=":material/check_circle:")
+    except Exception as exc:
+        st.error(str(exc))
+    if st.session_state.migration_sync_logs is not None:
+        st.dataframe(st.session_state.migration_sync_logs, hide_index=True, column_config=thousand_number_columns(st.session_state.migration_sync_logs))
+
+
 def render_ddl_preview(ddl_text: str) -> None:
     lines = ddl_text.splitlines()
     preview = "\n".join(lines[:DDL_PREVIEW_MAX_LINES])
@@ -967,8 +1203,8 @@ def render_ddl_controls(selected_owners: list[str], selected_tables: pd.DataFram
         comparison["after_layout"],
         int(multiplier * 10) / 10,
     )
-    structure_tab, comment_tab, mapping_tab = st.tabs(
-        [":material/account_tree: 구조 DDL", ":material/comment: 코멘트 DDL", ":material/table_chart: 컬럼 매핑"]
+    structure_tab, comment_tab, column_mapping_tab, migration_mapping_tab = st.tabs(
+        [":material/account_tree: 구조 DDL", ":material/comment: 코멘트 DDL", ":material/table_chart: 컬럼 매핑", ":material/sync_alt: 이관 매핑"]
     )
     with structure_tab:
         st.caption("구조 DDL에는 테이블·컬럼 코멘트가 함께 포함됩니다.")
@@ -995,7 +1231,7 @@ def render_ddl_controls(selected_owners: list[str], selected_tables: pd.DataFram
                 render_ddl_preview(artifact.comment_text)
         else:
             st.info("생성할 코멘트가 없습니다. ENTITY 또는 ATTR 값이 있는지 확인해 주세요.")
-    with mapping_tab:
+    with column_mapping_tab:
         st.caption(f"DDL 생성 규칙으로 변환한 원천·타깃 컬럼 매핑 {len(column_mapping):,}건입니다.")
         st.download_button(
             "컬럼 매핑 엑셀 다운로드",
@@ -1010,6 +1246,8 @@ def render_ddl_controls(selected_owners: list[str], selected_tables: pd.DataFram
             height=460,
             column_config=thousand_number_columns(column_mapping),
         )
+    with migration_mapping_tab:
+        render_migration_mapping_sync(selected_tables, column_mapping)
     with st.expander(":material/play_arrow: Oracle DDL 실행", expanded=False):
         execution_mode = st.segmented_control(
             "실행 범위",
