@@ -40,4 +40,3 @@ page = st.navigation(
 )
 
 page.run()
-
