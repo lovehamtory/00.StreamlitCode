@@ -4,6 +4,7 @@ import math
 import re
 from dataclasses import dataclass
 from datetime import datetime
+from io import BytesIO
 from time import perf_counter
 from typing import Any
 
@@ -148,6 +149,16 @@ def source_column_name(value: object, colno: object, used: set[str]) -> str:
 
 def oracle_column_identifier(value: str) -> str:
     return f'"{value}"' if value in ORACLE_RESERVED_WORDS else value
+
+
+def target_column_note(source_column: object, target_column: str) -> str:
+    source_name = clean_text(source_column).strip("'").upper()
+    notes: list[str] = []
+    if target_column != source_name:
+        notes.append("☆컬럼변경")
+    if source_name in ORACLE_RESERVED_WORDS:
+        notes.append("◎예약어")
+    return " · ".join(notes)
 
 
 def fallback_target_table(owner: str, table: str) -> str:
@@ -706,6 +717,84 @@ def generated_table_grid(artifact: GeneratedDdl, comment_only: bool = False) -> 
     return pd.DataFrame(rows)
 
 
+def generated_column_mapping_grid(
+    table_changes: pd.DataFrame,
+    after_layout: pd.DataFrame,
+    character_multiplier: int,
+) -> pd.DataFrame:
+    columns = [
+        "SRC SYSTEM",
+        "SRC TBL",
+        "SRC ENT",
+        "SRC COLNO",
+        "SRC COL",
+        "SRC ATTR",
+        "SRC DATATYPE",
+        "SRC LEN",
+        "SRC ISPK",
+        "SRC NULLABLE",
+        "TGT COL",
+        "TGT DATATYPE",
+        "TGT 비고",
+    ]
+    after_groups = table_groups(after_layout)
+    rows: list[dict[str, object]] = []
+    for _, table_change in table_changes.iterrows():
+        source_system = normalized(table_change["DB"])
+        source_table = normalized(table_change["테이블"])
+        layout = after_groups.get((source_system, source_table))
+        if layout is None or layout.empty:
+            continue
+        used_columns: set[str] = set()
+        source_entity = first_entity(layout)
+        for _, row in layout.sort_values("COLNO", key=lambda item: item.map(colno_number)).iterrows():
+            target_column = source_column_name(row["COL"], row["COLNO"], used_columns)
+            rows.append(
+                {
+                    "SRC SYSTEM": source_system,
+                    "SRC TBL": source_table,
+                    "SRC ENT": source_entity,
+                    "SRC COLNO": clean_text(row["COLNO"]),
+                    "SRC COL": clean_text(row["COL"]),
+                    "SRC ATTR": clean_text(row["ATTR"]),
+                    "SRC DATATYPE": clean_text(row["DATATYPE"]),
+                    "SRC LEN": clean_text(row["LEN"]),
+                    "SRC ISPK": clean_text(row["ISPK"]),
+                    "SRC NULLABLE": clean_text(row["NULLABLE"]),
+                    "TGT COL": target_column,
+                    "TGT DATATYPE": mssql_to_oracle(row["DATATYPE"], row["LEN"], character_multiplier),
+                    "TGT 비고": target_column_note(row["COL"], target_column),
+                }
+            )
+    return pd.DataFrame(rows, columns=columns)
+
+
+def column_mapping_excel_bytes(frame: pd.DataFrame) -> bytes:
+    from openpyxl.styles import Border, Font, PatternFill, Side
+
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="openpyxl") as writer:
+        frame.to_excel(writer, sheet_name="컬럼매핑", index=False)
+        worksheet = writer.sheets["컬럼매핑"]
+        worksheet.freeze_panes = "A2"
+        worksheet.auto_filter.ref = worksheet.dimensions
+        thin_side = Side(style="thin", color="9EADBF")
+        all_border = Border(left=thin_side, right=thin_side, top=thin_side, bottom=thin_side)
+        header_font = Font(name="맑은 고딕", size=10, bold=True)
+        body_font = Font(name="맑은 고딕", size=10)
+        header_fill = PatternFill(fill_type="solid", fgColor="D9EAF7")
+        for row_index, row in enumerate(worksheet.iter_rows(), start=1):
+            for cell in row:
+                cell.font = header_font if row_index == 1 else body_font
+                cell.border = all_border
+                if row_index == 1:
+                    cell.fill = header_fill
+        for column_cells in worksheet.columns:
+            column_letter = column_cells[0].column_letter
+            worksheet.column_dimensions[column_letter].width = min(max(len(str(cell.value or "")) for cell in column_cells) + 2, 42)
+    return output.getvalue()
+
+
 def render_ddl_preview(ddl_text: str) -> None:
     lines = ddl_text.splitlines()
     preview = "\n".join(lines[:DDL_PREVIEW_MAX_LINES])
@@ -873,7 +962,14 @@ def render_ddl_controls(selected_owners: list[str], selected_tables: pd.DataFram
     if artifact is None or artifact.source_keys != selected_keys:
         return
     st.success(f"DDL 생성 테이블: {artifact.table_count}개 · 생성 시각: {artifact.generated_at}", icon=":material/check_circle:")
-    structure_tab, comment_tab = st.tabs([":material/account_tree: 구조 DDL", ":material/comment: 코멘트 DDL"])
+    column_mapping = generated_column_mapping_grid(
+        selected_tables,
+        comparison["after_layout"],
+        int(multiplier * 10) / 10,
+    )
+    structure_tab, comment_tab, mapping_tab = st.tabs(
+        [":material/account_tree: 구조 DDL", ":material/comment: 코멘트 DDL", ":material/table_chart: 컬럼 매핑"]
+    )
     with structure_tab:
         st.caption("구조 DDL에는 테이블·컬럼 코멘트가 함께 포함됩니다.")
         st.download_button(
@@ -899,6 +995,21 @@ def render_ddl_controls(selected_owners: list[str], selected_tables: pd.DataFram
                 render_ddl_preview(artifact.comment_text)
         else:
             st.info("생성할 코멘트가 없습니다. ENTITY 또는 ATTR 값이 있는지 확인해 주세요.")
+    with mapping_tab:
+        st.caption(f"DDL 생성 규칙으로 변환한 원천·타깃 컬럼 매핑 {len(column_mapping):,}건입니다.")
+        st.download_button(
+            "컬럼 매핑 엑셀 다운로드",
+            data=column_mapping_excel_bytes(column_mapping),
+            file_name=f"MssqlOracleLayout_ColumnMapping_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            icon=":material/download:",
+        )
+        st.dataframe(
+            column_mapping,
+            hide_index=True,
+            height=460,
+            column_config=thousand_number_columns(column_mapping),
+        )
     with st.expander(":material/play_arrow: Oracle DDL 실행", expanded=False):
         execution_mode = st.segmented_control(
             "실행 범위",

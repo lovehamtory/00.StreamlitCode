@@ -1,4 +1,5 @@
 .streamlit/secrets.toml
+.streamlit/migration_setup.toml
 __pycache__/
 *.pyc
 redshift_restore_runs/

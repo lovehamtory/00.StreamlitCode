@@ -14,7 +14,7 @@ except ImportError:
     pyodbc = None
 
 
-SOURCE_SERVERS = ("CERDB", "INSIDEBANK", "JBNDB", "MEMDB", "PREEDDB", "SALDB")
+SOURCE_SERVERS = ("CERDB", "HS_RESORT", "INSIDEBANK", "JBNDB", "MEMDB", "PREEDDB", "SALDB")
 REFRESH_OPTIONS = {"1초": 1, "5초": 5, "10초": 10, "30초": 30, "1분": 60, "5분": 300, "10분": 600}
 ORACLE_SESSION_USERS = ("PCERP_RENTALAPP", "PCERP_RENTALAPP_MIG")
 
@@ -214,7 +214,7 @@ def monitor_mssql_databases(config: dict[str, Any]) -> list[dict[str, Any]]:
                 """
                 SELECT name, state_desc
                   FROM sys.databases
-                 WHERE name IN ('CERDB', 'INSIDEBANK', 'JBNDB', 'MEMDB', 'PREEDDB', 'SALDB')
+                 WHERE name IN ('CERDB', 'HS_RESORT', 'INSIDEBANK', 'JBNDB', 'MEMDB', 'PREEDDB', 'SALDB')
                  ORDER BY name
                 """
             )
