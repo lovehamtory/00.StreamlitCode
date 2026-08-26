@@ -6,30 +6,20 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 
-from SrcTgtSecurity import AccessContext, allowed, connect, qualified, query_frame, text
+from SrcTgtDataType import redshift_type
+from SrcTgtRuntime import RuntimeContext, connect, qualified, query_frame, text
 
 
-def table_maps(context: AccessContext) -> pd.DataFrame:
+def table_maps(context: RuntimeContext) -> pd.DataFrame:
     query = f'''SELECT mpg_id, prj_cd, sbj_area_cd, src_conn_id, src_sch_nm, src_tbl_nm,
                        tgt_sch_nm, tgt_tbl_nm, tgt_dist_style, tgt_dist_key_col, tgt_sort_style, tgt_sort_cols, tgt_encd_auto_yn, tgt_ddl_sql
                   FROM {qualified(context.schema_name, "tb_mig_tbl_mpg")}
                  WHERE active_yn = TRUE
                  ORDER BY prj_cd, sbj_area_cd, tgt_sch_nm, tgt_tbl_nm, mpg_id'''
-    frame = query_frame(context.values, query)
-    if frame.empty or context.authorizations.auth_role_cd.map(text).str.upper().eq("ADMIN").any():
-        return frame
-    visible = pd.Series(False, index=frame.index)
-    for row in context.authorizations.itertuples(index=False):
-        condition = pd.Series(True, index=frame.index)
-        if text(row.prj_cd):
-            condition &= frame.prj_cd.eq(text(row.prj_cd))
-        if text(row.sbj_area_cd):
-            condition &= frame.sbj_area_cd.eq(text(row.sbj_area_cd))
-        visible |= condition
-    return frame.loc[visible].copy()
+    return query_frame(context.values, query)
 
 
-def column_maps(context: AccessContext, mapping_id: int) -> pd.DataFrame:
+def column_maps(context: RuntimeContext, mapping_id: int) -> pd.DataFrame:
     query = f'''SELECT col_ord, src_col_no, src_col_nm, src_data_type, src_null_yn, src_key_role_cd,
                        tgt_col_no, tgt_col_nm, tgt_data_type, tgt_null_yn, tgt_key_role_cd, trnsf_expr, dflt_expr
                   FROM {qualified(context.schema_name, "tb_mig_col_mpg")}
@@ -69,10 +59,7 @@ def identifier(value: object) -> str:
 
 
 def target_type(value: object) -> str:
-    candidate = text(value)
-    if not candidate or not re.fullmatch(r"[A-Za-z0-9_(), ]+", candidate):
-        raise ValueError(f"대상 데이터 타입 형식이 올바르지 않습니다: {candidate}")
-    return candidate.upper()
+    return redshift_type(value)
 
 
 def ddl_for(table: pd.Series, columns: pd.DataFrame) -> str:
@@ -104,22 +91,22 @@ def ddl_for(table: pd.Series, columns: pd.DataFrame) -> str:
     return f"CREATE TABLE IF NOT EXISTS {qualified(text(table.tgt_sch_nm), text(table.tgt_tbl_nm))} (\n{',\n'.join(definitions)}\n)\n{'\n'.join(clauses)};"
 
 
-def save_target_design(context: AccessContext, mapping_id: int, design: dict[str, object]) -> None:
+def save_target_design(context: RuntimeContext, mapping_id: int, design: dict[str, object]) -> None:
     query = f'''UPDATE {qualified(context.schema_name, "tb_mig_tbl_mpg")}
                    SET tgt_dist_style = %s, tgt_dist_key_col = %s, tgt_sort_style = %s, tgt_sort_cols = %s, tgt_encd_auto_yn = %s,
-                       tgt_ddl_sql = NULL, ddl_aprv_sts_cd = 'DRAFT', meta_ver_no = meta_ver_no + 1, upd_by = %s, upd_dtm = GETDATE()
+                       tgt_ddl_sql = NULL, meta_ver_no = meta_ver_no + 1, upd_dtm = GETDATE()
                  WHERE mpg_id = %s'''
     with connect(context.values) as connection:
         with connection.cursor() as cursor:
-            cursor.execute(query, (design["tgt_dist_style"], design["tgt_dist_key_col"] or None, design["tgt_sort_style"], design["tgt_sort_cols"] or None, design["tgt_encd_auto_yn"], context.user_id, mapping_id))
+            cursor.execute(query, (design["tgt_dist_style"], design["tgt_dist_key_col"] or None, design["tgt_sort_style"], design["tgt_sort_cols"] or None, design["tgt_encd_auto_yn"], mapping_id))
         connection.commit()
 
 
-def save_ddl(context: AccessContext, mapping_id: int, ddl: str) -> None:
-    query = f"UPDATE {qualified(context.schema_name, 'tb_mig_tbl_mpg')} SET tgt_ddl_sql = %s, ddl_aprv_sts_cd = 'DRAFT', meta_ver_no = meta_ver_no + 1, upd_by = %s, upd_dtm = GETDATE() WHERE mpg_id = %s"
+def save_ddl(context: RuntimeContext, mapping_id: int, ddl: str) -> None:
+    query = f"UPDATE {qualified(context.schema_name, 'tb_mig_tbl_mpg')} SET tgt_ddl_sql = %s, meta_ver_no = meta_ver_no + 1, upd_dtm = GETDATE() WHERE mpg_id = %s"
     with connect(context.values) as connection:
         with connection.cursor() as cursor:
-            cursor.execute(query, (ddl, context.user_id, mapping_id))
+            cursor.execute(query, (ddl, mapping_id))
         connection.commit()
 
 
@@ -128,7 +115,7 @@ def mapping_label(frame: pd.DataFrame, mapping_id: int) -> str:
     return f"{int(mapping_id)} · {row.src_sch_nm}.{row.src_tbl_nm} → {row.tgt_sch_nm}.{row.tgt_tbl_nm}"
 
 
-def render_target_reflection(context: AccessContext, layout_values: dict[str, Any], layout_schema: str, layout_table: str) -> None:
+def render_target_reflection(context: RuntimeContext, layout_values: dict[str, Any], layout_schema: str, layout_table: str) -> None:
     st.subheader("대상 반영안")
     try:
         mappings = table_maps(context)
@@ -164,7 +151,7 @@ def render_target_reflection(context: AccessContext, layout_values: dict[str, An
         st.markdown("#### 대상 반영안")
         columns = column_maps(context, int(mapping_id))
         st.dataframe(target_columns(columns), hide_index=True, height=360)
-    can_edit = allowed(context.authorizations, "EDIT", mapping.prj_cd, mapping.sbj_area_cd)
+    can_edit = True
     with st.form("target_design_form"):
         left, right = st.columns(2)
         with left:

@@ -17,7 +17,7 @@ except ImportError:
 
 PROJECT_ROOT = Path(__file__).parent.parent
 SCHEMA_CONFIG = PROJECT_ROOT.parent / ".streamlit" / "migration_setup.toml"
-REQUIRED_TABLES = {"tb_mig_sbj_area", "tb_mig_sbj_dag_mpg", "tb_mig_usr", "tb_mig_usr_auth", "tb_mig_conn", "tb_mig_tbl_mpg", "tb_mig_col_mpg", "tb_mig_run_log", "tb_mig_artf_item"}
+REQUIRED_TABLES = {"tb_mig_sbj_area", "tb_mig_sbj_dag_mpg", "tb_mig_conn", "tb_mig_tbl_mpg", "tb_mig_col_mpg", "tb_mig_tbl_dep", "tb_mig_run_log", "tb_mig_s3_manf", "tb_mig_tbl_load_hist", "tb_mig_vald_rslt", "tb_mig_vald_col_rslt", "tb_mig_artf_item"}
 
 
 def text(value: object) -> str:
@@ -141,7 +141,7 @@ def render_initial_setup() -> None:
     if submitted:
         try:
             initialize(connection_values(), schema_name(value))
-            st.success("메타데이터를 생성했습니다. 초기 관리자 로그인으로 계속하십시오.", icon=":material/check_circle:")
+            st.success("메타데이터를 생성했습니다. 이관 관리로 계속하십시오.", icon=":material/check_circle:")
             st.rerun()
         except Exception as error:
             st.error(f"초기 설정 실패: {error}", icon=":material/error:")

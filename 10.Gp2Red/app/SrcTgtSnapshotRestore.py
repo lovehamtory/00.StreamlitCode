@@ -12,6 +12,9 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 
+from SrcTgtConnection import connection_frame
+from SrcTgtRuntime import qualified, query_frame, runtime_context, text
+
 
 TABLE_COLUMNS = ["source_schema", "source_table"]
 RECORD_COLUMNS = ["순서", "원본", "대상", "상태", "진행률", "경과 시간", "요청 ID", "메시지", "갱신 시각"]
@@ -19,7 +22,8 @@ TERMINAL_STATES = {"SUCCEEDED", "FAILED", "CANCELED"}
 ACTIVE_STATES = {"QUEUED", "PENDING", "IN_PROGRESS", "WAIT_TIMEOUT"}
 SNAPSHOT_TYPES = {"전체": None, "자동": "automated", "수동": "manual"}
 RESTORE_MODES = {"별도 테이블 복구": "copy", "원본 DROP 후 복구": "replace"}
-RUN_STORE = Path(__file__).resolve().parent / "redshift_restore_runs"
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
+RUN_STORE = PROJECT_ROOT / "10.Gp2Red" / "log" / "snapshot_restore_runs"
 
 
 def utc_now() -> str:
@@ -31,7 +35,7 @@ def empty_table_frame() -> pd.DataFrame:
 
 
 def initialize_state() -> None:
-    RUN_STORE.mkdir(exist_ok=True)
+    RUN_STORE.mkdir(parents=True, exist_ok=True)
     st.session_state.setdefault("restore_table_draft", empty_table_frame())
     st.session_state.setdefault("snapshots", [])
     st.session_state.setdefault("snapshot_context", "")
@@ -42,32 +46,35 @@ def initialize_state() -> None:
     st.session_state.setdefault("drop_preflight", {})
 
 
-def get_redshift_settings() -> dict[str, str]:
-    if "redshift" not in st.secrets:
+def get_redshift_settings(section_name: str) -> dict[str, str]:
+    if not section_name or section_name not in st.secrets:
         return {}
     return {
         key: str(value)
-        for key, value in dict(st.secrets["redshift"]).items()
-        if key != "targets" and value is not None
+        for key, value in dict(st.secrets[section_name]).items()
+        if value is not None
     }
 
 
-def get_database_options(settings: dict[str, str]) -> list[dict[str, str]]:
-    options: list[dict[str, str]] = []
-    raw_redshift = st.secrets.get("redshift", {})
-    raw_targets = dict(raw_redshift.get("targets", {}))
-    for target_values in raw_targets.values():
-        values = {name: str(value) for name, value in dict(target_values).items() if value is not None}
-        database_name = values.get("database_name", "")
+def get_database_options(context: Any) -> list[dict[str, Any]]:
+    options: list[dict[str, Any]] = []
+    connections = connection_frame(query_frame, context.values, context.schema_name, qualified, active_only=True)
+    candidates = connections.loc[connections.dbms_cd.map(text).str.upper().eq("REDSHIFT")]
+    for row in candidates.itertuples(index=False):
+        section_name = text(row.sec_sect_nm)
+        values = get_redshift_settings(section_name)
+        database_name = values.get("target_database") or values.get("database") or values.get("database_name", "")
         options.append(
             {
-                "label": values.get("label") or database_name,
+                "conn_id": text(row.conn_id),
+                "label": f"{text(row.conn_id)} · {text(row.conn_nm)}",
+                "sec_sect_nm": section_name,
                 "cluster_identifier": values.get("cluster_identifier", ""),
-                "source_database": database_name,
+                "source_database": values.get("source_database") or database_name,
                 "target_database": database_name,
-                "default_schema": values.get("default_schema", settings.get("default_schema", "public")),
-                "data_api_db_user": values.get("data_api_db_user", settings.get("data_api_db_user", "")),
-                "case_sensitive_identifiers": values.get("case_sensitive_identifiers", settings.get("case_sensitive_identifiers", "false")),
+                "default_schema": values.get("default_schema", "public"),
+                "data_api_db_user": values.get("data_api_db_user", ""),
+                "settings": values,
             }
         )
     return options
@@ -1038,7 +1045,7 @@ def start_restore_worker(run_id: str) -> int:
     command = [sys.executable, str(Path(__file__).resolve()), "--restore-worker", run_id]
     process = subprocess.Popen(
         command,
-        cwd=str(Path(__file__).resolve().parent),
+        cwd=str(PROJECT_ROOT),
         stdin=subprocess.DEVNULL,
         stdout=subprocess.DEVNULL,
         stderr=subprocess.DEVNULL,
@@ -1063,39 +1070,36 @@ def render_live_restore_state() -> None:
 
 
 if __name__ == "__main__" and len(sys.argv) == 3 and sys.argv[1] == "--restore-worker":
-    execute_restore_worker(sys.argv[2], get_redshift_settings())
+    saved_run = load_run(sys.argv[2])
+    execute_restore_worker(sys.argv[2], get_redshift_settings(text(saved_run["context"].get("sec_sect_nm"))))
     raise SystemExit
 
 
-st.set_page_config(page_title="Redshift 스냅샷 테이블 복구", page_icon=":material/restore_page:", layout="wide")
 initialize_state()
 
-settings = get_redshift_settings()
-database_options = get_database_options(settings)
+runtime = runtime_context()
+database_options = get_database_options(runtime)
 if not database_options:
-    st.error(".streamlit/secrets.toml에 redshift.targets.<DB명> 설정이 없습니다.", icon=":material/error:")
+    st.error("접속정보에 사용 중인 대상 Redshift DB 접속을 등록하십시오.", icon=":material/error:")
     st.stop()
-# 복구 상태를 확인하는 주기(초). 기본 10초, 허용 범위 5~120초입니다.
-default_poll_seconds = setting_int(settings, "poll_seconds", 10, 5, 120)
-# 테이블 하나의 복구 완료를 기다리는 최대 시간(분). 기본 360분, 허용 범위 5~1440분입니다.
-default_timeout_minutes = setting_int(settings, "table_timeout_minutes", 360, 5, 1440)
-poll_seconds = default_poll_seconds
-timeout_minutes = default_timeout_minutes
-continue_on_failure = True
 
-with st.sidebar:
+with st.container(border=True):
     selected_database = st.selectbox(
         "복구 대상 DB",
         database_options,
         format_func=lambda item: item["label"],
         key="selected_database",
     )
+    settings = selected_database["settings"]
+    poll_seconds = setting_int(settings, "poll_seconds", 10, 5, 120)
+    timeout_minutes = setting_int(settings, "table_timeout_minutes", 360, 5, 1440)
+    continue_on_failure = True
     cluster_identifier = selected_database["cluster_identifier"]
     source_database = selected_database["source_database"]
     target_database = selected_database["target_database"]
     default_schema = selected_database["default_schema"]
     data_api_db_user = selected_database["data_api_db_user"]
-    case_sensitive = setting_bool(selected_database, "case_sensitive_identifiers", False)
+    case_sensitive = setting_bool(settings, "case_sensitive_identifiers", False)
     target_access_key = "|".join(
         [selected_database["label"], cluster_identifier, source_database, target_database]
     )
@@ -1109,8 +1113,8 @@ with st.sidebar:
     if target_access_error:
         st.error(f"{selected_database['label']} 접근 확인 실패: {target_access_error}", icon=":material/error:")
 
-st.title("Redshift 스냅샷 테이블 복구")
-st.caption("⚙️ Created by ♡홍율파파♡")
+st.title("🧰 Redshift 스냅샷 복구")
+st.caption("⚙️ Created by ♡홍율파파")
 
 with st.container(border=True):
     st.subheader("1. 스냅샷 선택", anchor=False)
@@ -1261,6 +1265,8 @@ with st.container(border=True):
                 validate_snapshot(client, cluster_identifier.strip(), snapshot_identifier.strip())
                 run_id = f"restore-{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
                 context = {
+                    "conn_id": selected_database["conn_id"],
+                    "sec_sect_nm": selected_database["sec_sect_nm"],
                     "cluster_identifier": cluster_identifier.strip(),
                     "snapshot_identifier": snapshot_identifier.strip(),
                     "source_database": source_database.strip(),

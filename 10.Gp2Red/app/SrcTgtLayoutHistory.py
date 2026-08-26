@@ -9,7 +9,7 @@ from typing import Any
 import pandas as pd
 import streamlit as st
 
-from SrcTgtSecurity import allowed, query_frame, require_access
+from SrcTgtRuntime import query_frame, runtime_context
 from SrcTgtConnection import connection_frame, connection_label, runtime_connection_values, selectable_connections
 from SrcTgtTargetReflection import render_target_reflection
 
@@ -256,10 +256,7 @@ def render_comparison() -> None:
 
 
 def main() -> None:
-    access = require_access()
-    if not allowed(access.authorizations, "EDIT"):
-        st.error("원천 레이아웃 수집 권한이 없습니다.", icon=":material/lock:")
-        st.stop()
+    access = runtime_context()
     init_state(); apply_green_style()
     try:
         target = config("redshift_sql")
@@ -268,7 +265,7 @@ def main() -> None:
         st.stop()
     try:
         connections = connection_frame(query_frame, access.values, access.schema_name, qualified, active_only=True)
-        source_connections = selectable_connections(connections, "SRC")
+        source_connections = selectable_connections(connections)
         source_connections = source_connections.loc[source_connections.dbms_cd.map(text).str.upper().eq("GREENPLUM")].copy()
         if source_connections.empty:
             raise ValueError("사용 중인 Greenplum 원천 접속정보를 접속관리에서 등록하십시오.")

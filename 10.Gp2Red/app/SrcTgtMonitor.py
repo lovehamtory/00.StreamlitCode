@@ -3,27 +3,10 @@ from __future__ import annotations
 import pandas as pd
 import streamlit as st
 
-from SrcTgtSecurity import AccessContext, public_monitor_context, qualified, query_frame, text
+from SrcTgtRuntime import RuntimeContext, public_monitor_context, qualified, query_frame, text
 
 
-def visible(frame: pd.DataFrame, context: AccessContext) -> pd.DataFrame:
-    if context.authorizations.empty:
-        return frame
-    if context.authorizations.auth_role_cd.map(text).str.upper().eq("ADMIN").any():
-        return frame
-    allowed_rows = pd.Series(False, index=frame.index)
-    for row in context.authorizations.itertuples(index=False):
-        project_code, subject_code = text(row.prj_cd), text(row.sbj_area_cd)
-        condition = pd.Series(True, index=frame.index)
-        if project_code:
-            condition &= frame.PRJ_CD.eq(project_code)
-        if subject_code:
-            condition &= frame.SBJ_AREA_CD.eq(subject_code)
-        allowed_rows |= condition
-    return frame.loc[allowed_rows].copy()
-
-
-def progress_frame(context: AccessContext) -> pd.DataFrame:
+def progress_frame(context: RuntimeContext) -> pd.DataFrame:
     query = f'''WITH LAST_LOG AS (
                     SELECT mpg_id, wrk_sts_cd, wrk_stt_dtm, wrk_end_dtm, wrk_elps_sec, src_row_cnt, tgt_row_cnt, wrk_msg,
                            ROW_NUMBER() OVER (PARTITION BY mpg_id ORDER BY wrk_stt_dtm DESC, run_hist_id DESC) AS row_no
@@ -36,7 +19,7 @@ def progress_frame(context: AccessContext) -> pd.DataFrame:
                   LEFT JOIN LAST_LOG L ON L.mpg_id = T.mpg_id AND L.row_no = 1
                  WHERE T.active_yn = TRUE
                  ORDER BY T.prj_cd, T.sbj_area_cd, T.tgt_sch_nm, T.tgt_tbl_nm'''
-    return visible(query_frame(context.values, query), context)
+    return query_frame(context.values, query)
 
 
 def status_counts(frame: pd.DataFrame) -> tuple[int, int, int, int]:
@@ -57,24 +40,18 @@ def progress_card(title: str, frame: pd.DataFrame) -> None:
         st.caption(f"진행 {running:,} · 실패 {failed:,}")
 
 
-def dag_frame(context: AccessContext, visible_maps: pd.DataFrame) -> pd.DataFrame:
+def dag_frame(context: RuntimeContext, visible_maps: pd.DataFrame) -> pd.DataFrame:
     if visible_maps.empty:
         return pd.DataFrame(columns=["DAG명", "DAG실행ID", "테이블", "성공", "실패", "작업상태", "작업시작일시", "작업종료일시", "실행경과초"])
-    mapping_ids = [int(value) for value in visible_maps.MPG_ID.dropna().tolist()]
-    restricted = not context.authorizations.empty and not context.authorizations.auth_role_cd.map(text).str.upper().eq("ADMIN").any()
-    if restricted and not mapping_ids:
-        return pd.DataFrame(columns=["DAG명", "DAG실행ID", "테이블", "성공", "실패", "작업상태", "작업시작일시", "작업종료일시", "실행경과초"])
-    condition = "" if not restricted else f"WHERE mpg_id IN ({', '.join('%s' for _ in mapping_ids)})"
     query = f'''SELECT dag_nm AS "DAG명", dag_run_id AS "DAG실행ID", COUNT(DISTINCT mpg_id) AS "테이블", SUM(CASE WHEN wrk_sts_cd = 'SUCCESS' THEN 1 ELSE 0 END) AS "성공", SUM(CASE WHEN wrk_sts_cd = 'FAILED' THEN 1 ELSE 0 END) AS "실패", CASE WHEN SUM(CASE WHEN wrk_sts_cd = 'FAILED' THEN 1 ELSE 0 END) > 0 THEN 'FAILED' WHEN SUM(CASE WHEN wrk_sts_cd IN ('RUNNING', 'REQUESTED', 'STARTED') THEN 1 ELSE 0 END) > 0 THEN 'RUNNING' WHEN SUM(CASE WHEN wrk_sts_cd = 'SUCCESS' THEN 1 ELSE 0 END) > 0 THEN 'SUCCESS' ELSE 'PENDING' END AS "작업상태", MIN(wrk_stt_dtm) AS "작업시작일시", MAX(wrk_end_dtm) AS "작업종료일시", DATEDIFF(second, MIN(wrk_stt_dtm), MAX(COALESCE(wrk_end_dtm, wrk_stt_dtm))) AS "실행경과초"
                   FROM {qualified(context.schema_name, "tb_mig_run_log")}
-                  {condition}
                  GROUP BY dag_nm, dag_run_id
                  ORDER BY MIN(wrk_stt_dtm) DESC
                  LIMIT 100'''
-    return query_frame(context.values, query, tuple(mapping_ids) if restricted else ())
+    return query_frame(context.values, query)
 
 
-def render_monitor(context: AccessContext) -> None:
+def render_monitor(context: RuntimeContext) -> None:
     try:
         progress = progress_frame(context)
     except Exception:

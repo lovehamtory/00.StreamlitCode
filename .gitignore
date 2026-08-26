@@ -2,7 +2,7 @@
 .streamlit/migration_setup.toml
 __pycache__/
 *.pyc
-redshift_restore_runs/
+10.Gp2Red/log/
 .cache/
 tmp/
 generated-image.png

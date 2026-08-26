@@ -17,7 +17,7 @@ LAYOUTS: dict[str, dict[str, Any]] = {
             ("MPG_ID", "테이블매핑ID"), ("PRJ_CD", "프로젝트코드"), ("SBJ_AREA_CD", "주제영역코드"), ("SBJ_AREA_NM", "주제영역명"),
             ("SRC_CONN_ID", "원천접속ID"), ("SRC_SCH_NM", "원천스키마명"), ("SRC_TBL_NM", "원천테이블명"),
             ("TGT_CONN_ID", "대상접속ID"), ("TGT_SCH_NM", "대상스키마명"), ("TGT_TBL_NM", "대상테이블명"), ("TGT_DIST_STYLE", "대상분산방식"), ("TGT_DIST_KEY_COL", "대상분산키컬럼명"), ("TGT_SORT_STYLE", "대상정렬방식"), ("TGT_SORT_COLS", "대상정렬키컬럼목록"), ("TGT_ENCD_AUTO_YN", "대상자동압축여부"),
-            ("LOAD_MTHD_CD", "적재방식코드"), ("TRNSF_PFL_CD", "이관실행프로파일코드"), ("S3_STG_PATH", "S3스테이징경로"), ("S3_FILE_FMT_CD", "S3파일형식코드"), ("MPG_STS_CD", "테이블매핑상태코드"), ("DDL_APRV_STS_CD", "DDL승인상태코드"), ("META_VER_NO", "메타데이터버전번호"),
+            ("LOAD_STS_CD", "이관적재상태코드"), ("INCR_BASIS_CD", "증분기준구분코드"), ("INCR_BASIS_COL_NM", "증분기준컬럼명"), ("PARL_MTHD_CD", "S3추출병렬방식코드"), ("PARL_CND_ARR", "S3추출병렬조건배열"), ("META_VER_NO", "메타데이터버전번호"),
         ],
     },
     "COL_DFN": {
@@ -32,14 +32,14 @@ LAYOUTS: dict[str, dict[str, Any]] = {
         "name": "매핑정의서",
         "sheet": "매핑정의서",
         "items": [
-            ("MPG_ID", "테이블매핑ID"), ("PRJ_CD", "프로젝트코드"), ("SBJ_AREA_CD", "주제영역코드"), ("SBJ_AREA_NM", "주제영역명"), ("SRC_CONN_ID", "원천접속ID"), ("SRC_SCH_NM", "원천스키마명"), ("SRC_TBL_NM", "원천테이블명"), ("TGT_CONN_ID", "대상접속ID"), ("TGT_SCH_NM", "대상스키마명"), ("TGT_TBL_NM", "대상테이블명"), ("TGT_DIST_STYLE", "대상분산방식"), ("TGT_DIST_KEY_COL", "대상분산키컬럼명"), ("TGT_SORT_STYLE", "대상정렬방식"), ("TGT_SORT_COLS", "대상정렬키컬럼목록"), ("LOAD_MTHD_CD", "적재방식코드"), ("WM_COL_NM", "증분기준컬럼명"), ("INCR_WHERE_TMPL", "증분추출조건템플릿"), ("TRNSF_PFL_CD", "이관실행프로파일코드"), ("S3_STG_PATH", "S3스테이징경로"), ("S3_FILE_FMT_CD", "S3파일형식코드"), ("COL_ORD", "매핑순서"), ("SRC_COL_NO", "원천컬럼순번"), ("SRC_COL_NM", "원천컬럼명"), ("SRC_DATA_TYPE", "원천데이터타입"), ("SRC_NULL_YN", "원천NULL허용여부"), ("SRC_KEY_ROLE_CD", "원천키역할코드"), ("TGT_COL_NO", "대상컬럼순번"), ("TGT_COL_NM", "대상컬럼명"), ("TGT_DATA_TYPE", "대상데이터타입"), ("TGT_NULL_YN", "대상NULL허용여부"), ("TGT_KEY_ROLE_CD", "대상키역할코드"), ("TRNSF_EXPR", "변환SQL식"), ("DFLT_EXPR", "기본값SQL식"), ("SUM_VALD_YN", "SUM검증여부"), ("HSH_VALD_YN", "HASH검증여부"), ("MPG_STS_CD", "테이블매핑상태코드"), ("DDL_APRV_STS_CD", "DDL승인상태코드"),
+            ("MPG_ID", "테이블매핑ID"), ("PRJ_CD", "프로젝트코드"), ("SBJ_AREA_CD", "주제영역코드"), ("SBJ_AREA_NM", "주제영역명"), ("SRC_CONN_ID", "원천접속ID"), ("SRC_SCH_NM", "원천스키마명"), ("SRC_TBL_NM", "원천테이블명"), ("TGT_CONN_ID", "대상접속ID"), ("TGT_SCH_NM", "대상스키마명"), ("TGT_TBL_NM", "대상테이블명"), ("TGT_DIST_STYLE", "대상분산방식"), ("TGT_DIST_KEY_COL", "대상분산키컬럼명"), ("TGT_SORT_STYLE", "대상정렬방식"), ("TGT_SORT_COLS", "대상정렬키컬럼목록"), ("LOAD_STS_CD", "이관적재상태코드"), ("INCR_BASIS_CD", "증분기준구분코드"), ("INCR_BASIS_COL_NM", "증분기준컬럼명"), ("PARL_MTHD_CD", "S3추출병렬방식코드"), ("PARL_CND_ARR", "S3추출병렬조건배열"), ("COL_ORD", "매핑순서"), ("SRC_COL_NO", "원천컬럼순번"), ("SRC_COL_NM", "원천컬럼명"), ("SRC_DATA_TYPE", "원천데이터타입"), ("SRC_NULL_YN", "원천NULL허용여부"), ("SRC_KEY_ROLE_CD", "원천키역할코드"), ("TGT_COL_NO", "대상컬럼순번"), ("TGT_COL_NM", "대상컬럼명"), ("TGT_DATA_TYPE", "대상데이터타입"), ("TGT_NULL_YN", "대상NULL허용여부"), ("TGT_KEY_ROLE_CD", "대상키역할코드"), ("TRNSF_EXPR", "변환SQL식"), ("DFLT_EXPR", "기본값SQL식"), ("SUM_VALD_YN", "합계검증여부"), ("HSH_VALD_YN", "해시검증여부"),
         ],
     },
     "UTEST_RSLT": {
         "name": "단위테스트결과서",
         "sheet": "테이블별로그",
         "items": [
-            ("WRK_DT", "작업일자"), ("DAG_NM", "DAG명"), ("DAG_RUN_ID", "DAG실행ID"), ("TASK_NM", "태스크명"), ("MPG_ID", "테이블매핑ID"), ("SRC_TBL", "원천테이블"), ("TGT_TBL", "대상테이블"), ("WRK_STEP_CD", "작업단계코드"), ("WRK_STS_CD", "작업상태코드"), ("SRC_ROW_CNT", "원천처리건수"), ("TGT_ROW_CNT", "대상처리건수"), ("SRC_SIZE_BYTE", "원천처리크기바이트"), ("TGT_SIZE_BYTE", "대상처리크기바이트"), ("WRK_STT_DTM", "작업시작일시"), ("WRK_END_DTM", "작업종료일시"), ("WRK_ELPS_SEC", "실행경과초"), ("WRK_CND_VAL", "작업조건값"), ("SQL_FILE_PATH", "SQL파일경로"), ("LOG_FILE_PATH", "로그파일경로"), ("WRK_MSG", "작업메시지"),
+            ("WRK_DT", "작업일자"), ("DAG_NM", "DAG명"), ("DAG_RUN_ID", "DAG실행ID"), ("TASK_NM", "태스크명"), ("MPG_ID", "테이블매핑ID"), ("MANF_ID", "S3매니페스트ID"), ("SRC_TBL", "원천테이블"), ("TGT_TBL", "대상테이블"), ("WRK_STEP_CD", "작업단계코드"), ("WRK_STS_CD", "작업상태코드"), ("S3_MANF_PATH", "S3매니페스트경로"), ("LOAD_MTHD_CD", "실행방식코드"), ("INS_SCOPE_CD", "대상적재범위코드"), ("SRC_ROW_CNT", "원천처리건수"), ("TGT_ROW_CNT", "대상처리건수"), ("SRC_SIZE_BYTE", "원천처리크기바이트"), ("TGT_SIZE_BYTE", "대상처리크기바이트"), ("WRK_STT_DTM", "작업시작일시"), ("WRK_END_DTM", "작업종료일시"), ("WRK_ELPS_SEC", "실행경과초"), ("WRK_CND_VAL", "작업조건값"), ("SQL_FILE_PATH", "SQL파일경로"), ("LOG_FILE_PATH", "로그파일경로"), ("WRK_MSG", "작업메시지"),
         ],
     },
     "ITEST_RSLT": {
@@ -53,7 +53,7 @@ LAYOUTS: dict[str, dict[str, Any]] = {
         "name": "검증결과서 · 결과",
         "sheet": "검증결과",
         "items": [
-            ("SRC_SYSTEM", "원천접속"), ("SRC_TABLE", "원천테이블"), ("SRC_ENTITY", "원천엔터티"), ("TGT_TABLE", "대상테이블"), ("SUM_STATUS", "SUM검증"), ("HASH_STATUS", "HASH검증"), ("VALD_RSLT", "검증결과"), ("ERR_YN", "오류여부"), ("SRC_CNT", "원천CNT"), ("TGT_CNT", "대상CNT"), ("CNT_DIFF", "CNT차이"), ("SUM_COLS", "SUM대상컬럼"), ("SUM_DIFF_CNT", "SUM불일치"), ("HASH_COLS", "HASH대상컬럼"), ("SRC_HASH_SUM", "원천HASH합계"), ("TGT_HASH_SUM", "대상HASH합계"), ("RMK", "비고"),
+            ("EXEC_RUN_ID", "이관실행ID"), ("DAG_NM", "DAG명"), ("DAG_RUN_ID", "DAG실행ID"), ("MPG_ID", "테이블매핑ID"), ("VALD_DVSN_CD", "검증구분코드"), ("S3_MANF_PATH", "S3매니페스트경로"), ("CNT_VALD_STS_CD", "건수검증상태"), ("SRC_CNT", "원천건수"), ("TGT_CNT", "대상건수"), ("CNT_DIFF", "건수차이"), ("SUM_VALD_STS_CD", "합계검증상태"), ("HSH_VALD_STS_CD", "해시검증상태"), ("VALD_STS_CD", "검증상태"), ("VALD_STT_DTM", "검증시작일시"), ("VALD_END_DTM", "검증종료일시"), ("VALD_ELPS_SEC", "검증경과초"), ("VALD_MSG", "검증메시지"),
         ],
     },
 }
@@ -99,7 +99,7 @@ def configured_items(configured: pd.DataFrame, layout_code: str) -> pd.DataFrame
     return defaults
 
 
-def save_layout(connect: Callable[[dict[str, Any]], Any], values: dict[str, Any], schema_name: str, qualified: Callable[[str, str], str], layout_code: str, items: pd.DataFrame, user_id: str) -> None:
+def save_layout(connect: Callable[[dict[str, Any]], Any], values: dict[str, Any], schema_name: str, qualified: Callable[[str, str], str], layout_code: str, items: pd.DataFrame) -> None:
     table_name = qualified(schema_name, "tb_mig_artf_item")
     records = items.loc[:, ["ITEM_CD", "ITEM_NM", "DISP_ORD", "OUT_YN"]].copy()
     if records.ITEM_NM.astype(str).str.strip().eq("").any():
@@ -111,8 +111,8 @@ def save_layout(connect: Callable[[dict[str, Any]], Any], values: dict[str, Any]
             cursor.execute(f"DELETE FROM {table_name} WHERE artf_cd = %s", (layout_code,))
             for row in records.sort_values("DISP_ORD").itertuples(index=False):
                 cursor.execute(
-                    f"INSERT INTO {table_name} (artf_cd, item_cd, item_nm, disp_ord, out_yn, crt_by, upd_by) VALUES (%s, %s, %s, %s, %s, %s, %s)",
-                    (layout_code, str(row.ITEM_CD), str(row.ITEM_NM).strip(), int(row.DISP_ORD), bool(row.OUT_YN), user_id, user_id),
+                    f"INSERT INTO {table_name} (artf_cd, item_cd, item_nm, disp_ord, out_yn) VALUES (%s, %s, %s, %s, %s)",
+                    (layout_code, str(row.ITEM_CD), str(row.ITEM_NM).strip(), int(row.DISP_ORD), bool(row.OUT_YN)),
                 )
         connection.commit()
 
@@ -121,7 +121,7 @@ def table_frame(query_frame: Callable[..., pd.DataFrame], values: dict[str, Any]
     query = f'''SELECT T.mpg_id AS "MPG_ID", T.prj_cd AS "PRJ_CD", T.sbj_area_cd AS "SBJ_AREA_CD", S.sbj_area_nm AS "SBJ_AREA_NM",
                       T.src_conn_id AS "SRC_CONN_ID", T.src_sch_nm AS "SRC_SCH_NM", T.src_tbl_nm AS "SRC_TBL_NM",
                       T.tgt_conn_id AS "TGT_CONN_ID", T.tgt_sch_nm AS "TGT_SCH_NM", T.tgt_tbl_nm AS "TGT_TBL_NM", T.tgt_dist_style AS "TGT_DIST_STYLE", T.tgt_dist_key_col AS "TGT_DIST_KEY_COL", T.tgt_sort_style AS "TGT_SORT_STYLE", T.tgt_sort_cols AS "TGT_SORT_COLS", T.tgt_encd_auto_yn AS "TGT_ENCD_AUTO_YN",
-                      T.load_mthd_cd AS "LOAD_MTHD_CD", T.trnsf_pfl_cd AS "TRNSF_PFL_CD", T.s3_stg_path AS "S3_STG_PATH", T.s3_file_fmt_cd AS "S3_FILE_FMT_CD", T.mpg_sts_cd AS "MPG_STS_CD", T.ddl_aprv_sts_cd AS "DDL_APRV_STS_CD", T.meta_ver_no AS "META_VER_NO"
+                      T.load_sts_cd AS "LOAD_STS_CD", T.incr_basis_cd AS "INCR_BASIS_CD", T.incr_basis_col_nm AS "INCR_BASIS_COL_NM", T.parl_mthd_cd AS "PARL_MTHD_CD", T.parl_cnd_arr AS "PARL_CND_ARR", T.meta_ver_no AS "META_VER_NO"
                   FROM {qualified(schema_name, "tb_mig_tbl_mpg")} T
                   LEFT JOIN {qualified(schema_name, "tb_mig_sbj_area")} S ON S.sbj_area_cd = T.sbj_area_cd
                  WHERE T.active_yn = TRUE
@@ -140,7 +140,7 @@ def column_frame(query_frame: Callable[..., pd.DataFrame], values: dict[str, Any
 
 
 def mapping_frame(query_frame: Callable[..., pd.DataFrame], values: dict[str, Any], schema_name: str, qualified: Callable[[str, str], str]) -> pd.DataFrame:
-    query = f'''SELECT T.mpg_id AS "MPG_ID", T.prj_cd AS "PRJ_CD", T.sbj_area_cd AS "SBJ_AREA_CD", S.sbj_area_nm AS "SBJ_AREA_NM", T.src_conn_id AS "SRC_CONN_ID", T.src_sch_nm AS "SRC_SCH_NM", T.src_tbl_nm AS "SRC_TBL_NM", T.tgt_conn_id AS "TGT_CONN_ID", T.tgt_sch_nm AS "TGT_SCH_NM", T.tgt_tbl_nm AS "TGT_TBL_NM", T.tgt_dist_style AS "TGT_DIST_STYLE", T.tgt_dist_key_col AS "TGT_DIST_KEY_COL", T.tgt_sort_style AS "TGT_SORT_STYLE", T.tgt_sort_cols AS "TGT_SORT_COLS", T.load_mthd_cd AS "LOAD_MTHD_CD", T.wm_col_nm AS "WM_COL_NM", T.incr_where_tmpl AS "INCR_WHERE_TMPL", T.trnsf_pfl_cd AS "TRNSF_PFL_CD", T.s3_stg_path AS "S3_STG_PATH", T.s3_file_fmt_cd AS "S3_FILE_FMT_CD", C.col_ord AS "COL_ORD", C.src_col_no AS "SRC_COL_NO", C.src_col_nm AS "SRC_COL_NM", C.src_data_type AS "SRC_DATA_TYPE", C.src_null_yn AS "SRC_NULL_YN", C.src_key_role_cd AS "SRC_KEY_ROLE_CD", C.tgt_col_no AS "TGT_COL_NO", C.tgt_col_nm AS "TGT_COL_NM", C.tgt_data_type AS "TGT_DATA_TYPE", C.tgt_null_yn AS "TGT_NULL_YN", C.tgt_key_role_cd AS "TGT_KEY_ROLE_CD", C.trnsf_expr AS "TRNSF_EXPR", C.dflt_expr AS "DFLT_EXPR", C.sum_vald_yn AS "SUM_VALD_YN", C.hsh_vald_yn AS "HSH_VALD_YN", T.mpg_sts_cd AS "MPG_STS_CD", T.ddl_aprv_sts_cd AS "DDL_APRV_STS_CD"
+    query = f'''SELECT T.mpg_id AS "MPG_ID", T.prj_cd AS "PRJ_CD", T.sbj_area_cd AS "SBJ_AREA_CD", S.sbj_area_nm AS "SBJ_AREA_NM", T.src_conn_id AS "SRC_CONN_ID", T.src_sch_nm AS "SRC_SCH_NM", T.src_tbl_nm AS "SRC_TBL_NM", T.tgt_conn_id AS "TGT_CONN_ID", T.tgt_sch_nm AS "TGT_SCH_NM", T.tgt_tbl_nm AS "TGT_TBL_NM", T.tgt_dist_style AS "TGT_DIST_STYLE", T.tgt_dist_key_col AS "TGT_DIST_KEY_COL", T.tgt_sort_style AS "TGT_SORT_STYLE", T.tgt_sort_cols AS "TGT_SORT_COLS", T.load_sts_cd AS "LOAD_STS_CD", T.incr_basis_cd AS "INCR_BASIS_CD", T.incr_basis_col_nm AS "INCR_BASIS_COL_NM", T.parl_mthd_cd AS "PARL_MTHD_CD", T.parl_cnd_arr AS "PARL_CND_ARR", C.col_ord AS "COL_ORD", C.src_col_no AS "SRC_COL_NO", C.src_col_nm AS "SRC_COL_NM", C.src_data_type AS "SRC_DATA_TYPE", C.src_null_yn AS "SRC_NULL_YN", C.src_key_role_cd AS "SRC_KEY_ROLE_CD", C.tgt_col_no AS "TGT_COL_NO", C.tgt_col_nm AS "TGT_COL_NM", C.tgt_data_type AS "TGT_DATA_TYPE", C.tgt_null_yn AS "TGT_NULL_YN", C.tgt_key_role_cd AS "TGT_KEY_ROLE_CD", C.trnsf_expr AS "TRNSF_EXPR", C.dflt_expr AS "DFLT_EXPR", C.sum_vald_yn AS "SUM_VALD_YN", C.hsh_vald_yn AS "HSH_VALD_YN"
                   FROM {qualified(schema_name, "tb_mig_col_mpg")} C
                   JOIN {qualified(schema_name, "tb_mig_tbl_mpg")} T ON T.mpg_id = C.mpg_id AND T.active_yn = TRUE
                   LEFT JOIN {qualified(schema_name, "tb_mig_sbj_area")} S ON S.sbj_area_cd = T.sbj_area_cd
@@ -150,7 +150,7 @@ def mapping_frame(query_frame: Callable[..., pd.DataFrame], values: dict[str, An
 
 
 def unit_test_frame(query_frame: Callable[..., pd.DataFrame], values: dict[str, Any], schema_name: str, qualified: Callable[[str, str], str], start_dt: date, end_dt: date) -> pd.DataFrame:
-    query = f'''SELECT L.wrk_dt AS "WRK_DT", L.dag_nm AS "DAG_NM", L.dag_run_id AS "DAG_RUN_ID", L.task_nm AS "TASK_NM", L.mpg_id AS "MPG_ID", COALESCE(T.src_sch_nm || '.' || T.src_tbl_nm, '') AS "SRC_TBL", COALESCE(T.tgt_sch_nm || '.' || T.tgt_tbl_nm, '') AS "TGT_TBL", L.wrk_step_cd AS "WRK_STEP_CD", L.wrk_sts_cd AS "WRK_STS_CD", L.src_row_cnt AS "SRC_ROW_CNT", L.tgt_row_cnt AS "TGT_ROW_CNT", L.src_size_byte AS "SRC_SIZE_BYTE", L.tgt_size_byte AS "TGT_SIZE_BYTE", L.wrk_stt_dtm AS "WRK_STT_DTM", L.wrk_end_dtm AS "WRK_END_DTM", L.wrk_elps_sec AS "WRK_ELPS_SEC", L.wrk_cnd_val AS "WRK_CND_VAL", L.sql_file_path AS "SQL_FILE_PATH", L.log_file_path AS "LOG_FILE_PATH", L.wrk_msg AS "WRK_MSG"
+    query = f'''SELECT L.wrk_dt AS "WRK_DT", L.dag_nm AS "DAG_NM", L.dag_run_id AS "DAG_RUN_ID", L.task_nm AS "TASK_NM", L.mpg_id AS "MPG_ID", L.manf_id AS "MANF_ID", COALESCE(T.src_sch_nm || '.' || T.src_tbl_nm, '') AS "SRC_TBL", COALESCE(T.tgt_sch_nm || '.' || T.tgt_tbl_nm, '') AS "TGT_TBL", L.wrk_step_cd AS "WRK_STEP_CD", L.wrk_sts_cd AS "WRK_STS_CD", L.s3_manf_path AS "S3_MANF_PATH", L.load_mthd_cd AS "LOAD_MTHD_CD", L.ins_scope_cd AS "INS_SCOPE_CD", L.src_row_cnt AS "SRC_ROW_CNT", L.tgt_row_cnt AS "TGT_ROW_CNT", L.src_size_byte AS "SRC_SIZE_BYTE", L.tgt_size_byte AS "TGT_SIZE_BYTE", L.wrk_stt_dtm AS "WRK_STT_DTM", L.wrk_end_dtm AS "WRK_END_DTM", L.wrk_elps_sec AS "WRK_ELPS_SEC", L.wrk_cnd_val AS "WRK_CND_VAL", L.sql_file_path AS "SQL_FILE_PATH", L.log_file_path AS "LOG_FILE_PATH", L.wrk_msg AS "WRK_MSG"
                   FROM {qualified(schema_name, "tb_mig_run_log")} L
                   LEFT JOIN {qualified(schema_name, "tb_mig_tbl_mpg")} T ON T.mpg_id = L.mpg_id
                  WHERE L.mpg_id IS NOT NULL AND L.wrk_dt BETWEEN %s AND %s
@@ -167,9 +167,12 @@ def integration_test_frame(query_frame: Callable[..., pd.DataFrame], values: dic
     return query_frame(values, query, (start_dt, end_dt))
 
 
-def validation_frames() -> dict[str, pd.DataFrame]:
-    result = st.session_state.get("gp_rs_results", pd.DataFrame()).rename(columns={"소스SYSTEM": "SRC_SYSTEM", "소스TABLE": "SRC_TABLE", "소스ENTITY": "SRC_ENTITY", "타겟TABLE": "TGT_TABLE", "SUM 검증": "SUM_STATUS", "HASH 검증": "HASH_STATUS", "검증결과": "VALD_RSLT", "오류여부": "ERR_YN", "소스CNT": "SRC_CNT", "타겟CNT": "TGT_CNT", "CNT 차이": "CNT_DIFF", "SUM 대상 컬럼": "SUM_COLS", "SUM 불일치": "SUM_DIFF_CNT", "HASH 대상 컬럼": "HASH_COLS", "소스 HASH 합계": "SRC_HASH_SUM", "타겟 HASH 합계": "TGT_HASH_SUM", "비고": "RMK"})
-    return {"VALD_RSLT": result}
+def validation_frames(query_frame: Callable[..., pd.DataFrame], values: dict[str, Any], schema_name: str, qualified: Callable[[str, str], str], start_dt: date, end_dt: date) -> dict[str, pd.DataFrame]:
+    query = f'''SELECT exec_run_id AS "EXEC_RUN_ID", dag_nm AS "DAG_NM", dag_run_id AS "DAG_RUN_ID", mpg_id AS "MPG_ID", vald_dvsn_cd AS "VALD_DVSN_CD", s3_manf_path AS "S3_MANF_PATH", cnt_vald_sts_cd AS "CNT_VALD_STS_CD", src_cnt AS "SRC_CNT", tgt_cnt AS "TGT_CNT", cnt_diff AS "CNT_DIFF", sum_vald_sts_cd AS "SUM_VALD_STS_CD", hsh_vald_sts_cd AS "HSH_VALD_STS_CD", vald_sts_cd AS "VALD_STS_CD", vald_stt_dtm AS "VALD_STT_DTM", vald_end_dtm AS "VALD_END_DTM", vald_elps_sec AS "VALD_ELPS_SEC", vald_msg AS "VALD_MSG"
+                  FROM {qualified(schema_name, "tb_mig_vald_rslt")}
+                 WHERE CAST(vald_stt_dtm AS DATE) BETWEEN %s AND %s
+                 ORDER BY vald_hist_id DESC'''
+    return {"VALD_RSLT": query_frame(values, query, (start_dt, end_dt))}
 
 
 def apply_layout(frame: pd.DataFrame, items: pd.DataFrame) -> pd.DataFrame:
@@ -227,10 +230,10 @@ def document_frames(document_code: str, query_frame: Callable[..., pd.DataFrame]
         return {"UTEST_RSLT": unit_test_frame(query_frame, values, schema_name, qualified, start_dt, end_dt)}
     if document_code == "ITEST_RSLT":
         return {"ITEST_RSLT": integration_test_frame(query_frame, values, schema_name, qualified, start_dt, end_dt)}
-    return validation_frames()
+    return validation_frames(query_frame, values, schema_name, qualified, start_dt, end_dt)
 
 
-def render_artifacts(values: dict[str, Any], schema_name: str, user_id: str, can_edit: bool, query_frame: Callable[..., pd.DataFrame], connect: Callable[[dict[str, Any]], Any], qualified: Callable[[str, str], str]) -> None:
+def render_artifacts(values: dict[str, Any], schema_name: str, can_edit: bool, query_frame: Callable[..., pd.DataFrame], connect: Callable[[dict[str, Any]], Any], qualified: Callable[[str, str], str]) -> None:
     mode = st.segmented_control("산출물 업무", ["📥 산출물 생성", "🧩 레이아웃 정의"], default="📥 산출물 생성", label_visibility="collapsed")
     if mode == "🧩 레이아웃 정의":
         layout_code = st.selectbox("산출물", list(LAYOUTS), format_func=layout_label)
@@ -243,7 +246,7 @@ def render_artifacts(values: dict[str, Any], schema_name: str, user_id: str, can
         edited = st.data_editor(items, hide_index=True, disabled=["ITEM_CD"], column_config={"ITEM_CD": "항목코드", "ITEM_NM": "항목명", "DISP_ORD": st.column_config.NumberColumn("출력순서", min_value=1, step=1), "OUT_YN": st.column_config.CheckboxColumn("출력")}, key=f"artf_layout_{layout_code}")
         if st.button("레이아웃 저장", icon=":material/save:", type="primary", disabled=not can_edit):
             try:
-                save_layout(connect, values, schema_name, qualified, layout_code, edited, user_id)
+                save_layout(connect, values, schema_name, qualified, layout_code, edited)
                 st.success("산출물 레이아웃을 저장했습니다.", icon=":material/check_circle:")
             except Exception as error:
                 st.error(f"산출물 레이아웃 저장 실패: {error}", icon=":material/error:")

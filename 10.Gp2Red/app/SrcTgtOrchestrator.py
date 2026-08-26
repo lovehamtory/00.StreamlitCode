@@ -2,7 +2,6 @@ from pathlib import Path
 
 import streamlit as st
 
-from SrcTgtSecurity import logout, require_access
 from SrcTgtSetup import configured_schema, connection_values, metadata_ready, render_initial_setup
 
 
@@ -20,17 +19,14 @@ if not initialized:
     render_initial_setup()
     st.stop()
 
-access = require_access()
-
-with st.sidebar:
-    st.caption(f"로그인 사용자: {access.user_id}")
-    if st.button("로그아웃", icon=":material/logout:", key="orchestrator_logout"):
-        logout()
-
 page = st.navigation(
     {
         "이관": [
             st.Page(ROOT / "SrcTgtControl.py", title="이관 관리", icon=":material/account_tree:"),
+            st.Page(ROOT / "SrcTgtReload.py", title="일회성 이관 실행", icon=":material/restart_alt:"),
+        ],
+        "운영": [
+            st.Page(ROOT / "SrcTgtSnapshotRestore.py", title="스냅샷 복구", icon=":material/restore_page:"),
         ],
         "구조": [
             st.Page(ROOT / "SrcTgtLayoutHistory.py", title="구조조회", icon=":material/difference:"),

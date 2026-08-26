@@ -1,0 +1,86 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1440" height="980" viewBox="0 0 1440 980" role="img" aria-labelledby="title desc">
+  <title id="title">이관 관리 화면 안내도</title>
+  <desc id="desc">이관 관리, 일회성 이관 실행, 스냅샷 복구, 구조조회의 주요 화면 배치를 보여주는 안내도</desc>
+  <rect width="1440" height="980" fill="#f6f8fb"/>
+  <rect x="24" y="24" width="1392" height="58" rx="10" fill="#0f2747"/>
+  <text x="52" y="61" fill="#ffffff" font-family="Malgun Gothic, Arial, sans-serif" font-size="24" font-weight="700">이관 관리 · 화면 안내도</text>
+  <text x="1115" y="59" fill="#d8e9ff" font-family="Malgun Gothic, Arial, sans-serif" font-size="15">현재 구현 기준</text>
+  <rect x="24" y="100" width="242" height="848" rx="12" fill="#ffffff" stroke="#d8e1ec"/>
+  <text x="48" y="140" fill="#183a62" font-family="Malgun Gothic, Arial, sans-serif" font-size="19" font-weight="700">메뉴</text>
+  <rect x="42" y="164" width="206" height="40" rx="8" fill="#eaf2fb"/>
+  <text x="60" y="190" fill="#174f85" font-family="Malgun Gothic, Arial, sans-serif" font-size="16" font-weight="700">이관</text>
+  <text x="68" y="230" fill="#253649" font-family="Malgun Gothic, Arial, sans-serif" font-size="16">이관 관리</text>
+  <text x="68" y="266" fill="#253649" font-family="Malgun Gothic, Arial, sans-serif" font-size="16">일회성 이관 실행</text>
+  <rect x="42" y="294" width="206" height="40" rx="8" fill="#f3f6fa"/>
+  <text x="60" y="320" fill="#174f85" font-family="Malgun Gothic, Arial, sans-serif" font-size="16" font-weight="700">운영</text>
+  <text x="68" y="360" fill="#253649" font-family="Malgun Gothic, Arial, sans-serif" font-size="16">스냅샷 복구</text>
+  <rect x="42" y="388" width="206" height="40" rx="8" fill="#f3f6fa"/>
+  <text x="60" y="414" fill="#174f85" font-family="Malgun Gothic, Arial, sans-serif" font-size="16" font-weight="700">구조</text>
+  <text x="68" y="454" fill="#253649" font-family="Malgun Gothic, Arial, sans-serif" font-size="16">구조조회</text>
+  <line x1="48" y1="500" x2="242" y2="500" stroke="#d8e1ec"/>
+  <text x="48" y="536" fill="#5f6f82" font-family="Malgun Gothic, Arial, sans-serif" font-size="14">왼쪽 메뉴에서 큰 업무를 선택합니다.</text>
+  <text x="48" y="562" fill="#5f6f82" font-family="Malgun Gothic, Arial, sans-serif" font-size="14">이관 관리 안에서는 상단 업무 버튼으로</text>
+  <text x="48" y="586" fill="#5f6f82" font-family="Malgun Gothic, Arial, sans-serif" font-size="14">세부 기능을 전환합니다.</text>
+  <rect x="288" y="100" width="1128" height="500" rx="12" fill="#ffffff" stroke="#d8e1ec"/>
+  <text x="320" y="145" fill="#112d4e" font-family="Malgun Gothic, Arial, sans-serif" font-size="26" font-weight="700">🧭 이관 관리</text>
+  <text x="320" y="174" fill="#67798d" font-family="Malgun Gothic, Arial, sans-serif" font-size="15">하나의 화면에서 설정 · 매핑 · 검증 · 이력 · 산출물을 전환합니다.</text>
+  <rect x="320" y="205" width="104" height="40" rx="20" fill="#1769aa"/>
+  <text x="342" y="231" fill="#ffffff" font-family="Malgun Gothic, Arial, sans-serif" font-size="14" font-weight="700">주제영역</text>
+  <rect x="434" y="205" width="96" height="40" rx="20" fill="#eef3f8"/>
+  <text x="455" y="231" fill="#35495f" font-family="Malgun Gothic, Arial, sans-serif" font-size="14">DAG 생성</text>
+  <rect x="540" y="205" width="78" height="40" rx="20" fill="#eef3f8"/>
+  <text x="562" y="231" fill="#35495f" font-family="Malgun Gothic, Arial, sans-serif" font-size="14">매핑</text>
+  <rect x="628" y="205" width="78" height="40" rx="20" fill="#eef3f8"/>
+  <text x="650" y="231" fill="#35495f" font-family="Malgun Gothic, Arial, sans-serif" font-size="14">검증</text>
+  <rect x="716" y="205" width="98" height="40" rx="20" fill="#eef3f8"/>
+  <text x="736" y="231" fill="#35495f" font-family="Malgun Gothic, Arial, sans-serif" font-size="14">실행 이력</text>
+  <rect x="824" y="205" width="90" height="40" rx="20" fill="#eef3f8"/>
+  <text x="844" y="231" fill="#35495f" font-family="Malgun Gothic, Arial, sans-serif" font-size="14">산출물</text>
+  <rect x="924" y="205" width="100" height="40" rx="20" fill="#eef3f8"/>
+  <text x="941" y="231" fill="#35495f" font-family="Malgun Gothic, Arial, sans-serif" font-size="14">접속정보</text>
+  <rect x="320" y="274" width="1060" height="70" rx="9" fill="#edf6ff" stroke="#c8ddec"/>
+  <text x="344" y="303" fill="#174f85" font-family="Malgun Gothic, Arial, sans-serif" font-size="17" font-weight="700">주제영역</text>
+  <text x="344" y="328" fill="#516579" font-family="Malgun Gothic, Arial, sans-serif" font-size="14">주제영역명 · 상위영역 · 선행영역 · 사용여부를 입력하고 저장합니다.</text>
+  <rect x="320" y="366" width="1060" height="184" rx="9" fill="#ffffff" stroke="#d8e1ec"/>
+  <rect x="320" y="366" width="1060" height="36" rx="9" fill="#e9eff5"/>
+  <text x="342" y="390" fill="#2b4057" font-family="Malgun Gothic, Arial, sans-serif" font-size="14" font-weight="700">주제영역 코드</text>
+  <text x="500" y="390" fill="#2b4057" font-family="Malgun Gothic, Arial, sans-serif" font-size="14" font-weight="700">주제영역명</text>
+  <text x="690" y="390" fill="#2b4057" font-family="Malgun Gothic, Arial, sans-serif" font-size="14" font-weight="700">실행 차수</text>
+  <text x="838" y="390" fill="#2b4057" font-family="Malgun Gothic, Arial, sans-serif" font-size="14" font-weight="700">S3 DAG</text>
+  <text x="1080" y="390" fill="#2b4057" font-family="Malgun Gothic, Arial, sans-serif" font-size="14" font-weight="700">INS DAG</text>
+  <line x1="320" y1="438" x2="1380" y2="438" stroke="#e4eaf0"/>
+  <text x="342" y="427" fill="#344b62" font-family="Malgun Gothic, Arial, sans-serif" font-size="14">A010001</text>
+  <text x="500" y="427" fill="#344b62" font-family="Malgun Gothic, Arial, sans-serif" font-size="14">카드</text>
+  <text x="716" y="427" fill="#344b62" font-family="Malgun Gothic, Arial, sans-serif" font-size="14">1</text>
+  <text x="838" y="427" fill="#344b62" font-family="Malgun Gothic, Arial, sans-serif" font-size="14">mig_a010001_s3</text>
+  <text x="1080" y="427" fill="#344b62" font-family="Malgun Gothic, Arial, sans-serif" font-size="14">mig_a010001_ins</text>
+  <line x1="320" y1="480" x2="1380" y2="480" stroke="#e4eaf0"/>
+  <text x="342" y="469" fill="#344b62" font-family="Malgun Gothic, Arial, sans-serif" font-size="14">A010002</text>
+  <text x="500" y="469" fill="#344b62" font-family="Malgun Gothic, Arial, sans-serif" font-size="14">고객</text>
+  <text x="716" y="469" fill="#344b62" font-family="Malgun Gothic, Arial, sans-serif" font-size="14">1</text>
+  <text x="838" y="469" fill="#344b62" font-family="Malgun Gothic, Arial, sans-serif" font-size="14">mig_a010002_s3</text>
+  <text x="1080" y="469" fill="#344b62" font-family="Malgun Gothic, Arial, sans-serif" font-size="14">mig_a010002_ins</text>
+  <text x="344" y="526" fill="#65788c" font-family="Malgun Gothic, Arial, sans-serif" font-size="13">표의 값은 예시입니다. 실제 등록된 주제영역과 DAG명이 표시됩니다.</text>
+  <rect x="288" y="622" width="540" height="326" rx="12" fill="#ffffff" stroke="#d8e1ec"/>
+  <text x="320" y="664" fill="#112d4e" font-family="Malgun Gothic, Arial, sans-serif" font-size="22" font-weight="700">🧰 스냅샷 복구</text>
+  <rect x="320" y="690" width="476" height="44" rx="8" fill="#edf6ff"/>
+  <text x="340" y="718" fill="#174f85" font-family="Malgun Gothic, Arial, sans-serif" font-size="15">1. 복구 대상 Redshift 접속 선택</text>
+  <rect x="320" y="746" width="476" height="44" rx="8" fill="#f7f9fb"/>
+  <text x="340" y="774" fill="#35495f" font-family="Malgun Gothic, Arial, sans-serif" font-size="15">2. available 스냅샷 조회 · 선택</text>
+  <rect x="320" y="802" width="476" height="44" rx="8" fill="#f7f9fb"/>
+  <text x="340" y="830" fill="#35495f" font-family="Malgun Gothic, Arial, sans-serif" font-size="15">3. 복구 테이블 · 복구방식 입력</text>
+  <rect x="320" y="858" width="476" height="56" rx="8" fill="#fff3e8" stroke="#f0d0ad"/>
+  <text x="340" y="884" fill="#9d561b" font-family="Malgun Gothic, Arial, sans-serif" font-size="15" font-weight="700">4. 원본 DROP 복구는 참조 확인 후 실행</text>
+  <text x="340" y="905" fill="#9d561b" font-family="Malgun Gothic, Arial, sans-serif" font-size="13">확인 체크 없이는 실행되지 않습니다.</text>
+  <rect x="850" y="622" width="566" height="326" rx="12" fill="#ffffff" stroke="#d8e1ec"/>
+  <text x="882" y="664" fill="#112d4e" font-family="Malgun Gothic, Arial, sans-serif" font-size="22" font-weight="700">📋 운영 순서</text>
+  <circle cx="888" cy="708" r="16" fill="#1769aa"/><text x="883" y="714" fill="#ffffff" font-family="Arial, sans-serif" font-size="14" font-weight="700">1</text>
+  <text x="918" y="714" fill="#35495f" font-family="Malgun Gothic, Arial, sans-serif" font-size="15">접속정보와 주제영역을 먼저 등록</text>
+  <circle cx="888" cy="756" r="16" fill="#1769aa"/><text x="883" y="762" fill="#ffffff" font-family="Arial, sans-serif" font-size="14" font-weight="700">2</text>
+  <text x="918" y="762" fill="#35495f" font-family="Malgun Gothic, Arial, sans-serif" font-size="15">구조조회 후 테이블·컬럼 매핑 확정</text>
+  <circle cx="888" cy="804" r="16" fill="#1769aa"/><text x="883" y="810" fill="#ffffff" font-family="Arial, sans-serif" font-size="14" font-weight="700">3</text>
+  <text x="918" y="810" fill="#35495f" font-family="Malgun Gothic, Arial, sans-serif" font-size="15">DAG 생성 후 Airflow에 배포·실행</text>
+  <circle cx="888" cy="852" r="16" fill="#1769aa"/><text x="883" y="858" fill="#ffffff" font-family="Arial, sans-serif" font-size="14" font-weight="700">4</text>
+  <text x="918" y="858" fill="#35495f" font-family="Malgun Gothic, Arial, sans-serif" font-size="15">검증·실행 이력 확인 후 산출물 생성</text>
+  <text x="882" y="912" fill="#65788c" font-family="Malgun Gothic, Arial, sans-serif" font-size="13">초기에는 전체 적재, 검증 완료 후 필요한 테이블만 증분 전환합니다.</text>
+</svg>
