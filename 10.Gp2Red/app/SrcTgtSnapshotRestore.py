@@ -1114,7 +1114,6 @@ with st.container(border=True):
         st.error(f"{selected_database['label']} 접근 확인 실패: {target_access_error}", icon=":material/error:")
 
 st.title("🧰 Redshift 스냅샷 복구")
-st.caption("⚙️ Created by ♡홍율파파")
 
 with st.container(border=True):
     st.subheader("1. 스냅샷 선택", anchor=False)

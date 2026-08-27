@@ -75,7 +75,6 @@ def comparison(context_values: dict[str, Any], schema_name: str, connection_id: 
 
 
 st.title("🧱 구조·변경")
-st.caption("⚙️ Created by ♡홍율파파♡")
 
 try:
     context = runtime_context()

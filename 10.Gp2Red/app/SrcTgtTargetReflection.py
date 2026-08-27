@@ -12,10 +12,10 @@ from SrcTgtRuntime import RuntimeContext, connect, qualified, query_frame, text
 
 
 def table_maps(context: RuntimeContext) -> pd.DataFrame:
-    query = f'''SELECT mpg_id, prj_cd, sbj_area_cd, src_conn_id, src_sch_nm, src_tbl_nm, tgt_conn_id, tgt_sch_nm, tgt_tbl_nm, tgt_tbl_cmt, tgt_ddl_sql
-                  FROM {qualified(context.schema_name, "tb_mig_tbl_mpg")}
-                 WHERE active_yn = TRUE
-                 ORDER BY prj_cd, sbj_area_cd, tgt_sch_nm, tgt_tbl_nm, mpg_id'''
+    query = f'''SELECT T.mpg_id, T.prj_cd, T.sbj_area_cd, A.src_conn_id, T.src_sch_nm, T.src_tbl_nm, A.tgt_conn_id, T.tgt_sch_nm, T.tgt_tbl_nm, T.tgt_tbl_cmt, T.tgt_ddl_sql
+                  FROM {qualified(context.schema_name, "tb_mig_tbl_mpg")} T JOIN {qualified(context.schema_name, "tb_mig_sbj_area")} A ON A.sbj_area_cd = T.sbj_area_cd
+                 WHERE T.active_yn = TRUE
+                 ORDER BY T.prj_cd, T.sbj_area_cd, T.tgt_sch_nm, T.tgt_tbl_nm, T.mpg_id'''
     return query_frame(context.values, query)
 
 

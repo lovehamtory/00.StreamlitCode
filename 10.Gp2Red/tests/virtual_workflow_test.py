@@ -29,6 +29,7 @@ from common.mig_step_runtime import execute_logged_step
 class VirtualWorkflowTest(unittest.TestCase):
     def test_metadata_contract(self) -> None:
         ddl = (PROJECT_ROOT / "sql" / "01_mig_metadata_ddl.sql").read_text(encoding="utf-8").upper()
+        subject_block = ddl.split("CREATE TABLE MIG_META.TB_MIG_SBJ_AREA", 1)[1].split("CREATE TABLE MIG_META.TB_MIG_SBJ_DAG_MPG", 1)[0]
         table_block = ddl.split("CREATE TABLE MIG_META.TB_MIG_TBL_MPG", 1)[1].split("CREATE TABLE MIG_META.TB_MIG_COL_MPG", 1)[0]
         column_block = ddl.split("CREATE TABLE MIG_META.TB_MIG_COL_MPG", 1)[1].split("CREATE TABLE MIG_META.TB_MIG_MPG_CHG_HIST", 1)[0]
         for name in ("TB_MIG_CONN", "TB_MIG_SBJ_AREA", "TB_MIG_SBJ_DAG_MPG", "TB_MIG_SRC_LAYOUT", "TB_MIG_TBL_MPG", "TB_MIG_COL_MPG", "TB_MIG_MPG_CHG_HIST", "TB_MIG_S3_MANF", "TB_MIG_DAG_RUN", "TB_MIG_RUN_LOG", "TB_MIG_VALD_RSLT", "TB_MIG_VALD_COL_RSLT", "TB_MIG_TBL_LOAD_HIST", "TB_MIG_ARTF_ITEM"):
@@ -51,7 +52,10 @@ class VirtualWorkflowTest(unittest.TestCase):
         self.assertIn("SRC_EXT_SQL", ddl)
         self.assertIn("TGT_LOAD_SQL", ddl)
         self.assertNotIn("BASIS_STT_VAL", ddl)
-        self.assertLess(table_block.index("TGT_CONN_ID"), table_block.index("SRC_CONN_ID"))
+        self.assertIn("SRC_CONN_ID", subject_block)
+        self.assertIn("TGT_CONN_ID", subject_block)
+        self.assertNotIn("SRC_CONN_ID", table_block)
+        self.assertNotIn("TGT_CONN_ID", table_block)
         self.assertLess(column_block.index("TGT_COL_NM"), column_block.index("SRC_COL_NM"))
         self.assertLess(column_block.index("COL_MPG_MTHD_CD"), column_block.index("SRC_COL_NM"))
 

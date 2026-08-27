@@ -24,4 +24,8 @@ page = st.navigation(
     position="sidebar",
 )
 
+with st.sidebar:
+    st.divider()
+    st.caption("⚙️ Created by ♡홍율파파♡")
+
 page.run()

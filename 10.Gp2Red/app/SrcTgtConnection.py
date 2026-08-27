@@ -104,15 +104,15 @@ def save_connection(connect: Callable[[dict[str, Any]], Any], values: dict[str, 
         raise ValueError("S3 기준경로는 s3://로 시작해야 합니다.")
     section = reference_name(record["sec_sect_nm"], "Secrets 섹션명")
     table_name = qualified(schema_name, "tb_mig_conn")
-    mapping_table = qualified(schema_name, "tb_mig_tbl_mpg")
+    subject_table = qualified(schema_name, "tb_mig_sbj_area")
     with connect(values) as connection:
         with connection.cursor() as cursor:
             cursor.execute(f"SELECT conn_id FROM {table_name} WHERE conn_id = %s", (item_id,))
             existing = cursor.fetchone()
             if not bool(record["active_yn"]):
-                cursor.execute(f"SELECT 1 FROM {mapping_table} WHERE (src_conn_id = %s OR tgt_conn_id = %s) AND active_yn = TRUE LIMIT 1", (item_id, item_id))
+                cursor.execute(f"SELECT 1 FROM {subject_table} WHERE (src_conn_id = %s OR tgt_conn_id = %s) AND active_yn = TRUE LIMIT 1", (item_id, item_id))
                 if cursor.fetchone() is not None:
-                    raise ValueError("사용 중인 테이블매핑이 있어 접속정보를 사용 중지할 수 없습니다.")
+                    raise ValueError("사용 중인 주제영역이 있어 접속정보를 사용 중지할 수 없습니다.")
             arguments = (name, dbms, char_multiple, base_path, section, bool(record["active_yn"]), item_id)
             if existing is None:
                 cursor.execute(f"INSERT INTO {table_name} (conn_id, conn_nm, dbms_cd, char_len_mul, s3_stg_path, sec_sect_nm, active_yn) VALUES (%s, %s, %s, %s, %s, %s, %s)", (item_id, *arguments[:-1]))

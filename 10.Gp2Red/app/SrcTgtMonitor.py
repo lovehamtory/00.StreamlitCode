@@ -66,11 +66,9 @@ try:
     monitor_context = public_monitor_context()
 except Exception:
     st.title("📈 실행 현황")
-    st.caption("⚙️ Created by ♡홍율파파♡")
     st.info("초기 설정 메뉴에서 메타 연결과 스키마를 준비한 뒤 다시 선택하십시오.", icon=":material/settings:")
 else:
     st.title("📈 실행 현황")
-    st.caption("⚙️ Created by ♡홍율파파♡")
 
     @st.fragment(run_every="5s")
     def auto_refresh() -> None:

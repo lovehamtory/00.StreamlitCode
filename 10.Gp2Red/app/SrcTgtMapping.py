@@ -16,11 +16,11 @@ from SrcTgtLoadState import INCREMENT_METHODS, SYSTEM_COLUMN_FORMATS, normalize_
 
 
 TABLE_FIELDS = [
-    "MPG_ID", "PRJ_CD", "SBJ_AREA_CD", "TGT_CONN_ID", "TGT_SCH_NM", "TGT_TBL_NM", "TGT_TBL_CMT",
-    "SRC_CONN_ID", "SRC_SCH_NM", "SRC_TBL_NM", "LOAD_STS_CD", "SYS_COL_NM_ARR", "SYS_COL_FMT_CD", "INCR_MTHD_CD", "SRC_INCR_COL_NM_ARR", "PARL_MTHD_CD", "PARL_CND_ARR",
+    "MPG_ID", "PRJ_CD", "SBJ_AREA_CD", "TGT_SCH_NM", "TGT_TBL_NM", "TGT_TBL_CMT",
+    "SRC_SCH_NM", "SRC_TBL_NM", "LOAD_STS_CD", "SYS_COL_NM_ARR", "SYS_COL_FMT_CD", "INCR_MTHD_CD", "SRC_INCR_COL_NM_ARR", "PARL_MTHD_CD", "PARL_CND_ARR",
 ]
 
-COLUMN_PARENT_FIELDS = ["MPG_ID", "PRJ_CD", "SBJ_AREA_CD", "TGT_CONN_ID", "TGT_SCH_NM", "TGT_TBL_NM", "SRC_CONN_ID", "SRC_SCH_NM", "SRC_TBL_NM"]
+COLUMN_PARENT_FIELDS = ["MPG_ID", "PRJ_CD", "SBJ_AREA_CD", "TGT_SCH_NM", "TGT_TBL_NM", "SRC_SCH_NM", "SRC_TBL_NM"]
 COLUMN_DETAIL_FIELDS = ["COL_ORD", "TGT_COL_NO", "TGT_COL_NM", "TGT_COL_CMT", "TGT_DATA_TYPE", "TGT_NULL_YN", "TGT_KEY_ROLE_CD", "COL_MPG_MTHD_CD", "TGT_EXPR", "DFLT_EXPR", "S3_COL_NM", "S3_DATA_TYPE", "SRC_EXPR", "SRC_REF_COL_NM_ARR", "SRC_COL_NO", "SRC_COL_NM", "SRC_DATA_TYPE", "SRC_NULL_YN", "SRC_KEY_ROLE_CD", "SUM_VALD_YN", "HSH_VALD_YN"]
 COLUMN_FIELDS = [*COLUMN_PARENT_FIELDS, *COLUMN_DETAIL_FIELDS]
 
@@ -30,8 +30,8 @@ FIELD_LABELS = {
     "COL_ORD": "매핑순서", "TGT_COL_NO": "대상컬럼순번", "TGT_COL_NM": "대상컬럼명", "TGT_COL_CMT": "대상컬럼설명", "TGT_DATA_TYPE": "대상데이터타입", "TGT_NULL_YN": "대상NULL허용여부", "TGT_KEY_ROLE_CD": "대상키역할코드", "COL_MPG_MTHD_CD": "컬럼매핑방식", "TGT_EXPR": "이행적용SQL식", "DFLT_EXPR": "이행기본값SQL식", "S3_COL_NM": "S3중간컬럼명", "S3_DATA_TYPE": "S3중간데이터타입", "SRC_EXPR": "이관적용SQL식", "SRC_REF_COL_NM_ARR": "원천참조컬럼명배열", "SRC_COL_NO": "원천컬럼순번", "SRC_COL_NM": "원천컬럼명", "SRC_DATA_TYPE": "원천데이터타입", "SRC_NULL_YN": "원천NULL허용여부", "SRC_KEY_ROLE_CD": "원천키역할코드", "SUM_VALD_YN": "SUM검증여부", "HSH_VALD_YN": "HASH검증여부",
 }
 
-NATURAL_FIELDS = ["PRJ_CD", "SBJ_AREA_CD", "SRC_CONN_ID", "SRC_SCH_NM", "SRC_TBL_NM", "TGT_CONN_ID", "TGT_SCH_NM", "TGT_TBL_NM"]
-REQUIRED_TABLE_FIELDS = ["PRJ_CD", "SBJ_AREA_CD", "SRC_CONN_ID", "SRC_SCH_NM", "SRC_TBL_NM", "TGT_CONN_ID", "TGT_SCH_NM", "TGT_TBL_NM"]
+NATURAL_FIELDS = ["PRJ_CD", "SBJ_AREA_CD", "SRC_SCH_NM", "SRC_TBL_NM", "TGT_SCH_NM", "TGT_TBL_NM"]
+REQUIRED_TABLE_FIELDS = ["PRJ_CD", "SBJ_AREA_CD", "SRC_SCH_NM", "SRC_TBL_NM", "TGT_SCH_NM", "TGT_TBL_NM"]
 REQUIRED_COLUMN_FIELDS = ["COL_ORD", "TGT_COL_NM", "TGT_DATA_TYPE"]
 
 
@@ -85,8 +85,6 @@ def normalize_columns(frame: pd.DataFrame, fields: list[str]) -> pd.DataFrame:
 
 def defaults(row: dict[str, object]) -> dict[str, object]:
     output = {field: row.get(field) for field in TABLE_FIELDS}
-    output["SRC_CONN_ID"] = (text(output["SRC_CONN_ID"]) or "SRC_GP").upper()
-    output["TGT_CONN_ID"] = (text(output["TGT_CONN_ID"]) or "TGT_RED").upper()
     output["LOAD_STS_CD"] = text(output["LOAD_STS_CD"]).upper().replace("INCREMENTAL", "INCR") or "FULL"
     output["SYS_COL_FMT_CD"] = text(output["SYS_COL_FMT_CD"]).upper() or None
     output["INCR_MTHD_CD"] = text(output["INCR_MTHD_CD"]).upper() or None
@@ -202,7 +200,7 @@ def mapping_id(cursor: Any, schema_name: str, qualified: Callable[[str, str], st
         cursor.execute(f"SELECT mpg_id FROM {table_name} WHERE mpg_id = %s AND active_yn = TRUE", (row["MPG_ID"],))
         found = cursor.fetchall()
     else:
-        cursor.execute(f"SELECT mpg_id FROM {table_name} WHERE prj_cd = %s AND sbj_area_cd = %s AND src_conn_id = %s AND src_sch_nm = %s AND src_tbl_nm = %s AND tgt_conn_id = %s AND tgt_sch_nm = %s AND tgt_tbl_nm = %s AND active_yn = TRUE", natural_key(row))
+        cursor.execute(f"SELECT mpg_id FROM {table_name} WHERE prj_cd = %s AND sbj_area_cd = %s AND src_sch_nm = %s AND src_tbl_nm = %s AND tgt_sch_nm = %s AND tgt_tbl_nm = %s AND active_yn = TRUE", natural_key(row))
         found = cursor.fetchall()
     if len(found) > 1:
         raise ValueError("동일 원천·대상 식별값의 활성 테이블매핑이 둘 이상입니다.")
@@ -254,7 +252,7 @@ def resolve_column_mapping_id(cursor: Any, schema_name: str, qualified: Callable
     lookup.update({field: row.get(field) for field in NATURAL_FIELDS})
     resolved = mapping_id(cursor, schema_name, qualified, lookup)
     if resolved is None:
-        raise ValueError(f"컬럼매핑의 대상 테이블매핑을 찾을 수 없습니다: {key[0]} / {key[1]} / {key[4]} → {key[7]}")
+        raise ValueError(f"컬럼매핑의 대상 테이블매핑을 찾을 수 없습니다: {key[0]} / {key[1]} / {key[2]}.{key[3]} → {key[4]}.{key[5]}")
     return resolved
 
 
@@ -275,8 +273,15 @@ def save_bundle(connect: Callable[[dict[str, Any]], Any], values: dict[str, Any]
                 cursor.execute(f"SELECT 1 FROM {subject_table} WHERE sbj_area_cd = %s AND active_yn = TRUE", (subject_area,))
                 if cursor.fetchone() is None:
                     raise ValueError(f"사용 중인 주제영역을 찾을 수 없습니다: {subject_area}")
-            for row in tables:
-                validate_mapping_connections(cursor, schema_name, qualified, row["SRC_CONN_ID"], row["TGT_CONN_ID"])
+            area_connections: dict[str, tuple[str, str]] = {}
+            for subject_area in sorted({text(row["SBJ_AREA_CD"]) for row in tables}):
+                cursor.execute(f"SELECT src_conn_id, tgt_conn_id FROM {subject_table} WHERE sbj_area_cd = %s AND active_yn = TRUE", (subject_area,))
+                found = cursor.fetchone()
+                if found is None or not text(found[0]) or not text(found[1]):
+                    raise ValueError(f"주제영역의 원천·대상 접속정보를 확인하십시오: {subject_area}")
+                area_connections[subject_area] = (text(found[0]), text(found[1]))
+            for source_connection_id, target_connection_id in area_connections.values():
+                validate_mapping_connections(cursor, schema_name, qualified, source_connection_id, target_connection_id)
             uploaded_ids = {natural_key(row): upsert_table(cursor, schema_name, qualified, row) for row in tables}
             for row in tables:
                 record_mapping_change(cursor, schema_name, qualified, uploaded_ids[natural_key(row)], "TBL_MPG", "테이블매핑 저장", row)
@@ -339,6 +344,13 @@ def source_snapshots(query_frame: Callable[..., pd.DataFrame], values: dict[str,
                  GROUP BY src_conn_id, std_dt, src_sch_nm, src_tbl_nm
                  ORDER BY std_dt DESC, src_conn_id, src_sch_nm, src_tbl_nm'''
     return query_frame(values, query)
+
+
+def subject_connections(query_frame: Callable[..., pd.DataFrame], values: dict[str, Any], schema_name: str, qualified: Callable[[str, str], str]) -> pd.DataFrame:
+    return query_frame(values, f'''SELECT sbj_area_cd, sbj_area_nm, src_conn_id, tgt_conn_id
+                                   FROM {qualified(schema_name, "tb_mig_sbj_area")}
+                                  WHERE active_yn = TRUE AND src_conn_id IS NOT NULL AND tgt_conn_id IS NOT NULL
+                                  ORDER BY disp_ord, sbj_area_cd''')
 
 
 def source_columns(query_frame: Callable[..., pd.DataFrame], values: dict[str, Any], schema_name: str, qualified: Callable[[str, str], str], source_connection_id: str, standard_date: str, owner: str, table: str, character_multiple: object = 3) -> pd.DataFrame:
@@ -417,19 +429,30 @@ def render_single(maps: pd.DataFrame, values: dict[str, Any], schema_name: str, 
     current = None if selected == "신규" else maps.loc[maps.mpg_id.eq(selected)].iloc[0]
     try:
         connections = connection_frame(query_frame, values, schema_name, qualified, active_only=True)
-        source_connections = selectable_connections(connections, None if current is None else current.src_conn_id)
-        target_connections = selectable_connections(connections, None if current is None else current.tgt_conn_id)
-        if source_connections.empty or target_connections.empty:
-            raise ValueError("사용 중인 원천·대상 접속정보를 각각 한 건 이상 등록하십시오.")
+        areas = subject_connections(query_frame, values, schema_name, qualified)
+        if current is None:
+            if areas.empty:
+                raise ValueError("원천·대상 접속정보를 정의한 사용 주제영역이 없습니다.")
+            selected_area = st.selectbox("주제영역", areas.sbj_area_cd.tolist(), format_func=lambda value: f"{value} · {text(areas.loc[areas.sbj_area_cd.eq(value)].iloc[0].sbj_area_nm) or '미정'}", key="new_mapping_area")
+            area = areas.loc[areas.sbj_area_cd.eq(selected_area)].iloc[0]
+        else:
+            selected_area = text(current.sbj_area_cd)
+            area = pd.Series({"sbj_area_cd": selected_area, "src_conn_id": current.src_conn_id, "tgt_conn_id": current.tgt_conn_id})
+        src_conn_id = text(area.src_conn_id).upper()
+        tgt_conn_id = text(area.tgt_conn_id).upper()
+        source_connections = connections.loc[connections.conn_id.map(text).str.upper().eq(src_conn_id)].copy()
+        target_connections = connections.loc[connections.conn_id.map(text).str.upper().eq(tgt_conn_id)].copy()
+        if len(source_connections) != 1 or len(target_connections) != 1:
+            raise ValueError("주제영역의 원천·대상 접속정보가 사용 중이 아닙니다.")
     except Exception as error:
         st.error(f"접속정보 조회 실패: {error}", icon=":material/error:")
         return
     source_snapshot = None
-    automatic_key = f"mapping_auto_columns_{selected}"
+    automatic_key = f"mapping_auto_columns_{selected}_{selected_area}"
     if current is None:
         try:
             snapshots = source_snapshots(query_frame, values, schema_name, qualified)
-            snapshots = snapshots.loc[snapshots.SRC_CONN_ID.map(text).str.upper().isin(source_connections.conn_id.map(text).str.upper())].copy()
+            snapshots = snapshots.loc[snapshots.SRC_CONN_ID.map(text).str.upper().eq(src_conn_id)].copy()
             if snapshots.empty:
                 raise ValueError("사용 중인 원천 접속정보의 레이아웃 적재 이력이 없습니다. 먼저 원천 레이아웃에서 기준일을 적재하십시오.")
             snapshot_options = snapshots[["SRC_CONN_ID", "STD_DT", "OWNER", "TBL"]].astype(str).agg(" | ".join, axis=1).tolist()
@@ -450,18 +473,12 @@ def render_single(maps: pd.DataFrame, values: dict[str, Any], schema_name: str, 
         basic, execution = st.columns(2)
         with basic:
             prj_cd = st.text_input("프로젝트코드", value=form_value(current, "PRJ_CD"))
-            sbj_area_cd = st.text_input("주제영역코드", value=form_value(current, "SBJ_AREA_CD"))
-            target_default = form_value(current, "TGT_CONN_ID", text(target_connections.iloc[0].conn_id)).upper()
-            tgt_conn_id = st.selectbox("대상접속ID", target_connections.conn_id.tolist(), index=target_connections.conn_id.tolist().index(target_default) if target_default in target_connections.conn_id.tolist() else 0, format_func=lambda value: connection_label(target_connections, value))
+            sbj_area_cd = st.text_input("주제영역코드", value=selected_area, disabled=True)
+            st.text_input("대상접속ID", value=connection_label(target_connections, tgt_conn_id), disabled=True)
             tgt_sch_nm = st.text_input("대상스키마명", value=form_value(current, "TGT_SCH_NM"))
             tgt_tbl_nm = st.text_input("대상테이블명", value=form_value(current, "TGT_TBL_NM"))
             tgt_tbl_cmt = st.text_area("대상테이블설명", value=text(source_snapshot.ENTITY) if source_snapshot is not None else form_value(current, "TGT_TBL_CMT"), height=80)
-            if source_snapshot is not None:
-                src_conn_id = text(source_snapshot.SRC_CONN_ID).upper()
-                st.text_input("원천접속ID", value=connection_label(source_connections, src_conn_id), disabled=True)
-            else:
-                source_default = form_value(current, "SRC_CONN_ID", text(source_connections.iloc[0].conn_id)).upper()
-                src_conn_id = st.selectbox("원천접속ID", source_connections.conn_id.tolist(), index=source_connections.conn_id.tolist().index(source_default) if source_default in source_connections.conn_id.tolist() else 0, format_func=lambda value: connection_label(source_connections, value))
+            st.text_input("원천접속ID", value=connection_label(source_connections, src_conn_id), disabled=True)
             src_sch_nm = st.text_input("원천스키마명", value=text(source_snapshot.OWNER) if source_snapshot is not None else form_value(current, "SRC_SCH_NM"), disabled=True)
             src_tbl_nm = st.text_input("원천테이블명", value=text(source_snapshot.TBL) if source_snapshot is not None else form_value(current, "SRC_TBL_NM"), disabled=True)
         with execution:
@@ -491,7 +508,7 @@ def render_single(maps: pd.DataFrame, values: dict[str, Any], schema_name: str, 
     if submitted or generated:
         try:
             source = {} if current is None else {field: current[field.lower()] for field in TABLE_FIELDS if field.lower() in current.index}
-            source.update({"MPG_ID": None if current is None else int(selected), "PRJ_CD": prj_cd, "SBJ_AREA_CD": sbj_area_cd, "SRC_CONN_ID": src_conn_id, "SRC_SCH_NM": src_sch_nm, "SRC_TBL_NM": src_tbl_nm, "TGT_CONN_ID": tgt_conn_id, "TGT_SCH_NM": tgt_sch_nm, "TGT_TBL_NM": tgt_tbl_nm, "TGT_TBL_CMT": tgt_tbl_cmt, "LOAD_STS_CD": "FULL" if current is None else form_value(current, "LOAD_STS_CD", "FULL"), "SYS_COL_NM_ARR": system_columns, "SYS_COL_FMT_CD": system_format, "INCR_MTHD_CD": increment_method, "SRC_INCR_COL_NM_ARR": increment_columns, "PARL_MTHD_CD": parl_mthd_cd, "PARL_CND_ARR": parl_cnd_arr})
+            source.update({"MPG_ID": None if current is None else int(selected), "PRJ_CD": prj_cd, "SBJ_AREA_CD": selected_area, "SRC_SCH_NM": src_sch_nm, "SRC_TBL_NM": src_tbl_nm, "TGT_SCH_NM": tgt_sch_nm, "TGT_TBL_NM": tgt_tbl_nm, "TGT_TBL_CMT": tgt_tbl_cmt, "LOAD_STS_CD": "FULL" if current is None else form_value(current, "LOAD_STS_CD", "FULL"), "SYS_COL_NM_ARR": system_columns, "SYS_COL_FMT_CD": system_format, "INCR_MTHD_CD": increment_method, "SRC_INCR_COL_NM_ARR": increment_columns, "PARL_MTHD_CD": parl_mthd_cd, "PARL_CND_ARR": parl_cnd_arr})
             table = defaults(source)
             table["MPG_ID"] = None if current is None else int(selected)
             column_input = edited.copy()
