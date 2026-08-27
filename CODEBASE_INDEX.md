@@ -10,8 +10,8 @@ SRC → S3 → TGT 이관을 위한 Streamlit 메타 관리·DAG 생성 도구�
 | `10.Gp2Red/app/SrcTgtInitialize.py` | 클릭형 메타 초기 설정 화면 |
 | `10.Gp2Red/app/SrcTgtControl.py` | 접속·주제영역·매핑·DAG·검증·로그·산출물 통합 화면 |
 | `10.Gp2Red/app/SrcTgtLayoutHistory.py` | 원천 구조 수집·변경 비교·대상 반영안 화면 |
-| `10.Gp2Red/app/SrcTgtDagGenerator.py` | 주제영역 FULL·검증, 테이블 INCR·재적재 DAG, 원천 조회 SQL·S3 매니페스트/XCom·대상 컬럼매핑 DELETE·INSERT SQL 계획 생성 |
-| `10.Gp2Red/app/SrcTgtMapping.py` | 테이블·컬럼 매핑, 시스템컬럼 증분 규칙, 대상 설명 및 Excel 일괄 업로드 |
+| `10.Gp2Red/app/SrcTgtDagGenerator.py` | 주제영역 FULL·검증, 테이블 INCR·재적재 DAG, S3 FULL 초기화·INCR 31일 보관정리·매니페스트/XCom, SRC→S3 이관 및 S3→TGT 이행 SQL 계획 생성 |
+| `10.Gp2Red/app/SrcTgtMapping.py` | 대상→S3→원천 컬럼 매핑, MOVE·CONST·NULL·EXPR 규칙, 이관·이행 SQL 생성·저장·이력복원·컬럼수 검증, 시스템컬럼 증분 규칙 및 Excel 일괄 업로드 |
 | `10.Gp2Red/app/SrcTgtMonitor.py` | DAG·테이블 실행 현황 화면 |
 | `10.Gp2Red/app/SrcTgtArtifact.py` | Excel 산출물 및 레이아웃 정의 |
 | `10.Gp2Red/app/SrcTgtSnapshotRestore.py` | Redshift 스냅샷 복구 |

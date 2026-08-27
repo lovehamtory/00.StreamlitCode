@@ -61,11 +61,11 @@ def generated_source(dag_name: str, dag_type: str, subject_area: str, mapping_id
     flow = text(dag_type).upper()
     load_filter = " AND load_sts_cd = 'FULL'" if flow.startswith("FULL_") else " AND load_sts_cd = 'INCR'" if flow.startswith("INCR_") else ""
     if flow in {"FULL_SRC_S3", "INCR_SRC_S3", "RELOAD_SRC_S3"}:
-        steps = "s3_result = run_s3.expand(record=expand_parallel(records))\n    final_result = validate_src_s3.expand(record=s3_result)"
+        steps = "prepared = reset_full_s3.expand(record=records)\n    s3_result = run_s3.expand(record=expand_parallel(prepared))\n    src_validated = validate_src_s3.expand(record=s3_result)\n    final_result = cleanup_increment_s3(src_validated)"
     elif flow in {"FULL_S3_TGT", "INCR_S3_TGT", "RELOAD_S3_TGT"}:
         steps = "ins_result = run_ins.expand(record=records)\n    final_result = validate_s3_tgt.expand(record=ins_result)"
     elif flow in {"INCR_ALL", "RELOAD_ALL"}:
-        steps = "s3_result = run_s3.expand(record=expand_parallel(records))\n    src_validated = validate_src_s3.expand(record=s3_result)\n    ins_result = run_ins.expand(record=src_validated)\n    final_result = validate_s3_tgt.expand(record=ins_result)"
+        steps = "prepared = reset_full_s3.expand(record=records)\n    s3_result = run_s3.expand(record=expand_parallel(prepared))\n    src_validated = validate_src_s3.expand(record=s3_result)\n    cleanup = cleanup_increment_s3(src_validated)\n    ins_result = run_ins.expand(record=src_validated)\n    ins_result.set_upstream(cleanup)\n    final_result = validate_s3_tgt.expand(record=ins_result)"
     elif flow == "VALD_SRC_S3":
         steps = "final_result = validate_src_s3.expand(record=records)"
     elif flow == "VALD_S3_TGT":
@@ -76,6 +76,7 @@ def generated_source(dag_name: str, dag_type: str, subject_area: str, mapping_id
 
 import importlib
 import json
+import re
 from datetime import datetime
 from typing import Any
 
@@ -105,9 +106,9 @@ def meta_table(name: str) -> str:
     return METADATA_SCHEMA + "." + name
 
 def mappings(dag_run_id: str) -> list[dict[str, Any]]:
-    query = "SELECT mpg_id, prj_cd, sbj_area_cd, src_conn_id, src_sch_nm, src_tbl_nm, tgt_conn_id, tgt_sch_nm, tgt_tbl_nm, load_sts_cd, sys_col_nm_arr, sys_col_fmt_cd, incr_mthd_cd, src_incr_col_nm_arr, parl_mthd_cd, parl_cnd_arr, s3_stg_path, s3_rlt_path FROM " + meta_table("vw_mig_dag_tbl_mpg") + " WHERE " + MAP_FILTER_SQL + {load_filter!r} + " ORDER BY mpg_id"
+    query = "SELECT mpg_id, prj_cd, sbj_area_cd, src_conn_id, src_sch_nm, src_tbl_nm, tgt_conn_id, tgt_sch_nm, tgt_tbl_nm, load_sts_cd, sys_col_nm_arr, sys_col_fmt_cd, incr_mthd_cd, src_incr_col_nm_arr, parl_mthd_cd, parl_cnd_arr, src_ext_sql, tgt_load_sql, s3_stg_path, s3_rlt_path FROM " + meta_table("vw_mig_dag_tbl_mpg") + " WHERE " + MAP_FILTER_SQL + {load_filter!r} + " ORDER BY mpg_id"
     rows = metadata_hook().get_records(query, parameters=(MAP_FILTER_VALUE,))
-    columns = ["mpg_id", "prj_cd", "sbj_area_cd", "src_conn_id", "src_sch_nm", "src_tbl_nm", "tgt_conn_id", "tgt_sch_nm", "tgt_tbl_nm", "load_sts_cd", "sys_col_nm_arr", "sys_col_fmt_cd", "incr_mthd_cd", "src_incr_col_nm_arr", "parl_mthd_cd", "parl_cnd_arr", "s3_stg_path", "s3_rlt_path"]
+    columns = ["mpg_id", "prj_cd", "sbj_area_cd", "src_conn_id", "src_sch_nm", "src_tbl_nm", "tgt_conn_id", "tgt_sch_nm", "tgt_tbl_nm", "load_sts_cd", "sys_col_nm_arr", "sys_col_fmt_cd", "incr_mthd_cd", "src_incr_col_nm_arr", "parl_mthd_cd", "parl_cnd_arr", "src_ext_sql", "tgt_load_sql", "s3_stg_path", "s3_rlt_path"]
     return [dict(zip(columns, row)) | {{"dag_nm": DAG_ID, "dag_run_id": dag_run_id, "dag_type": DAG_TYPE}} for row in rows]
 
 def quote_identifier(value: object) -> str:
@@ -117,8 +118,8 @@ def quote_identifier(value: object) -> str:
     return '"' + name.replace('"', '""') + '"'
 
 def column_mappings(record: dict[str, Any]) -> list[dict[str, Any]]:
-    query = "SELECT src_col_nm, tgt_col_nm, trnsf_expr, dflt_expr FROM " + meta_table("tb_mig_col_mpg") + " WHERE mpg_id = %s AND active_yn = TRUE ORDER BY col_ord"
-    columns = ["src_col_nm", "tgt_col_nm", "trnsf_expr", "dflt_expr"]
+    query = "SELECT src_col_nm, tgt_col_nm, tgt_data_type, s3_col_nm, s3_data_type, col_mpg_mthd_cd, src_expr, tgt_expr, dflt_expr, src_ref_col_nm_arr FROM " + meta_table("tb_mig_col_mpg") + " WHERE mpg_id = %s AND active_yn = TRUE ORDER BY col_ord"
+    columns = ["src_col_nm", "tgt_col_nm", "tgt_data_type", "s3_col_nm", "s3_data_type", "col_mpg_mthd_cd", "src_expr", "tgt_expr", "dflt_expr", "src_ref_col_nm_arr"]
     return [dict(zip(columns, row)) for row in metadata_hook().get_records(query, parameters=(record["mpg_id"],))]
 
 def source_target_increment_columns(record: dict[str, Any], mappings: list[dict[str, Any]]) -> tuple[list[str], list[str]]:
@@ -133,6 +134,43 @@ def source_target_increment_columns(record: dict[str, Any], mappings: list[dict[
             raise RuntimeError("원천 증분 컬럼의 대상 컬럼매핑이 없습니다: " + str(source_key))
         targets.append(str(item["tgt_col_nm"]))
     return [str(value) for value in source_keys], targets
+
+def source_reference_columns(mappings: list[dict[str, Any]]) -> list[str]:
+    result: list[str] = []
+    for row in mappings:
+        method = str(row.get("col_mpg_mthd_cd") or "MOVE").upper()
+        if method in {{"CONST", "NULL"}}:
+            continue
+        raw = row.get("src_ref_col_nm_arr")
+        try:
+            references = json.loads(raw or "[]")
+        except (TypeError, json.JSONDecodeError) as error:
+            raise RuntimeError("원천 참조 컬럼명 배열을 확인하십시오.") from error
+        if not references:
+            source_name = str(row.get("src_col_nm") or "").strip()
+            references = [source_name] if source_name else []
+        if not isinstance(references, list) or any(not str(value or "").strip() for value in references):
+            raise RuntimeError("원천 참조 컬럼명 배열을 확인하십시오.")
+        for value in references:
+            name = str(value).strip()
+            if name.upper() not in {{item.upper() for item in result}}:
+                result.append(name)
+    return result
+
+def source_projection(row: dict[str, Any]) -> str:
+    method = str(row.get("col_mpg_mthd_cd") or "MOVE").upper()
+    stage_name = str(row.get("s3_col_nm") or "").strip()
+    if not stage_name:
+        if method in {{"CONST", "NULL"}}:
+            return ""
+        raise RuntimeError(method + " 컬럼매핑에는 S3중간컬럼명이 필요합니다.")
+    expression = str(row.get("src_expr") or "").strip()
+    source_name = str(row.get("src_col_nm") or "").strip()
+    if not expression:
+        if not source_name:
+            raise RuntimeError("S3중간컬럼 " + stage_name + "의 이관 SQL식 또는 원천컬럼명이 필요합니다.")
+        expression = "S." + quote_identifier(source_name)
+    return expression + " AS " + quote_identifier(stage_name)
 
 def source_value(value: object, format_code: object) -> str:
     raw = str(value or "").strip().replace("'", "''")
@@ -149,14 +187,35 @@ def source_value(value: object, format_code: object) -> str:
         return "TIMESTAMP '" + raw + "'"
     raise RuntimeError("시스템 컬럼 데이터 형식을 확인하십시오.")
 
+def s3_run_path(record: dict[str, Any], run_conf: dict[str, Any]) -> None:
+    work_date = str(run_conf.get("wrk_dt") or datetime.now().strftime("%Y%m%d")).replace("-", "")
+    if not re.fullmatch(r"[0-9]{{8}}", work_date):
+        raise RuntimeError("작업일자는 YYYYMMDD 형식이어야 합니다.")
+    base = str(record.get("s3_stg_path") or "").rstrip("/")
+    table_key = str(record.get("s3_rlt_path") or "").strip("/")
+    if not base.startswith("s3://") or not table_key:
+        raise RuntimeError("S3 기준경로를 확인하십시오.")
+    load_folder = "full" if str(record.get("load_sts_cd") or "").upper() == "FULL" else "incr"
+    run_label = re.sub(r"[^A-Za-z0-9._=-]+", "_", str(record.get("dag_run_id") or "").strip())
+    if not run_label:
+        raise RuntimeError("DAG 실행ID를 확인하십시오.")
+    root = base + "/" + load_folder + "/" + table_key
+    record["s3_work_dt"] = work_date
+    record["s3_load_path"] = root if load_folder == "full" else root + "/wrk_dt=" + work_date + "/run_id=" + run_label
+    record["s3_cleanup_prefix"] = root
+    record["s3_cleanup_before_write"] = load_folder == "full"
+    record["s3_retention_days"] = 31 if load_folder == "incr" else 0
+
 def source_extract_plan(record: dict[str, Any], run_conf: dict[str, Any]) -> dict[str, Any]:
     mappings = column_mappings(record)
     if not mappings:
         raise RuntimeError("원천 추출 컬럼매핑이 없습니다.")
     source_table = quote_identifier(record["src_sch_nm"]) + "." + quote_identifier(record["src_tbl_nm"])
-    source_columns = ", ".join("S." + quote_identifier(row["src_col_nm"]) for row in mappings if str(row.get("src_col_nm") or "").strip())
-    if not source_columns:
-        raise RuntimeError("원천 컬럼매핑이 없습니다.")
+    custom_sql = str(record.get("src_ext_sql") or "").strip()
+    if custom_sql:
+        if "__SRC_WHERE_CND__" not in custom_sql:
+            raise RuntimeError("수정 원천 추출 SQL에는 __SRC_WHERE_CND__ 치환값이 필요합니다.")
+    source_columns = ", ".join(value for value in (source_projection(item) for item in mappings) if value) or '1 AS "MIG_DUMMY"'
     custom_condition = str(run_conf.get("src_where_cnd") or "").strip()
     if any(token in custom_condition for token in (";", "--", "/*", "*/")):
         raise RuntimeError("원천 조회조건에 세미콜론 또는 SQL 주석을 입력할 수 없습니다.")
@@ -171,12 +230,29 @@ def source_extract_plan(record: dict[str, Any], run_conf: dict[str, Any]) -> dic
         inner_keys = "(" + ", ".join("I." + quote_identifier(column) for column in source_keys) + ")" if len(source_keys) > 1 else "I." + quote_identifier(source_keys[0])
         custom_condition = outer_keys + " IN (SELECT " + inner_keys + " FROM " + source_table + " AS I WHERE (" + system_predicate + "))"
     record["src_base_cnd"] = custom_condition or None
-    record["src_extract_sql"] = "SELECT " + source_columns + " FROM " + source_table + " AS S"
+    record["src_extract_sql"] = custom_sql or "SELECT " + source_columns + " FROM " + source_table + " AS S"
+    s3_run_path(record, run_conf)
     return record
 
 def target_column_value(row: dict[str, Any]) -> str:
-    source_name = str(row.get("src_col_nm") or "").strip()
-    value = str(row.get("trnsf_expr") or "").strip() or "S." + quote_identifier(source_name)
+    method = str(row.get("col_mpg_mthd_cd") or "MOVE").upper()
+    expression = str(row.get("tgt_expr") or "").strip()
+    stage_name = str(row.get("s3_col_nm") or "").strip()
+    if expression:
+        value = expression
+    elif method == "NULL":
+        data_type = str(row.get("tgt_data_type") or "").strip()
+        if not data_type:
+            raise RuntimeError("NULL 컬럼매핑에는 대상 데이터타입이 필요합니다.")
+        value = "CAST(NULL AS " + data_type + ")"
+    elif stage_name:
+        value = "S." + quote_identifier(stage_name)
+    elif method in {{"CONST", "EXPR"}}:
+        raise RuntimeError(method + " 컬럼매핑에는 이행 SQL식 또는 S3중간컬럼명이 필요합니다.")
+    elif method == "MOVE":
+        raise RuntimeError("MOVE 컬럼매핑에는 S3중간컬럼명이 필요합니다.")
+    else:
+        raise RuntimeError("컬럼매핑 방식을 확인하십시오.")
     default = str(row.get("dflt_expr") or "").strip()
     return "COALESCE(" + value + ", " + default + ")" if default else value
 
@@ -186,6 +262,13 @@ def target_load_plan(record: dict[str, Any]) -> dict[str, Any]:
         raise RuntimeError("대상 적재 컬럼매핑이 없습니다.")
     target = quote_identifier(record["tgt_sch_nm"]) + "." + quote_identifier(record["tgt_tbl_nm"])
     stage = str(record.get("tgt_stage_tbl") or "__MIG_STAGE__")
+    custom_sql = str(record.get("tgt_load_sql") or "").strip()
+    if custom_sql:
+        if "__MIG_STAGE__" not in custom_sql:
+            raise RuntimeError("수정 대상 적재 SQL에는 __MIG_STAGE__ 치환값이 필요합니다.")
+        record["tgt_load_sql"] = custom_sql.replace("__TGT_TABLE__", target)
+        record["tgt_stage_placeholder"] = "__MIG_STAGE__"
+        return record
     target_columns = ", ".join(quote_identifier(row["tgt_col_nm"]) for row in mappings)
     select_columns = [target_column_value(row) for row in mappings]
     insert_sql = "INSERT INTO " + target + " (" + target_columns + ") SELECT " + ", ".join(select_columns) + " FROM " + stage + " AS S"
@@ -215,7 +298,10 @@ def source_sql(record: dict[str, Any]) -> dict[str, Any]:
     if not query:
         raise RuntimeError("원천 추출 SQL이 없습니다.")
     condition = str(record.get("src_where_cnd") or "").strip()
-    record["src_extract_sql"] = query + (" WHERE " + condition if condition else "")
+    if "__SRC_WHERE_CND__" in query:
+        record["src_extract_sql"] = query.replace("__SRC_WHERE_CND__", condition or "1=1")
+    else:
+        record["src_extract_sql"] = query + (" WHERE " + condition if condition else "")
     return record
 
 def write_s3_manifest(record: dict[str, Any]) -> dict[str, Any]:
@@ -324,6 +410,25 @@ def migration_dag() -> None:
     @task
     def run_s3(record: dict[str, Any]) -> dict[str, Any]:
         return write_s3_manifest(execute(source_sql(record), "S3", "원천 S3 적재"))
+
+    @task
+    def reset_full_s3(record: dict[str, Any]) -> dict[str, Any]:
+        if bool(record.get("s3_cleanup_before_write")):
+            return execute(record, "S3_RESET", "S3 FULL 기준본 삭제")
+        return record
+
+    @task
+    def cleanup_increment_s3(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        completed: list[dict[str, Any]] = []
+        seen: set[int] = set()
+        for record in records:
+            mapping_id = int(record["mpg_id"])
+            if mapping_id in seen:
+                continue
+            seen.add(mapping_id)
+            if int(record.get("s3_retention_days") or 0) > 0:
+                completed.append(execute(record, "S3_CLEANUP", "S3 증분 기준본 정리"))
+        return completed
 
     @task(max_active_tis_per_dag=1)
     def run_ins(record: dict[str, Any]) -> dict[str, Any]:

@@ -15,7 +15,7 @@ from SrcTgtValidation import render_validation
 
 
 TABLE_COLUMNS = [
-    "mpg_id", "prj_cd", "sbj_area_cd", "src_conn_id", "src_sch_nm", "src_tbl_nm", "tgt_conn_id", "tgt_sch_nm", "tgt_tbl_nm", "tgt_tbl_cmt",
+    "mpg_id", "prj_cd", "sbj_area_cd", "tgt_conn_id", "tgt_sch_nm", "tgt_tbl_nm", "tgt_tbl_cmt", "src_conn_id", "src_sch_nm", "src_tbl_nm",
     "load_sts_cd", "sys_col_nm_arr", "sys_col_fmt_cd", "incr_mthd_cd", "src_incr_col_nm_arr", "parl_mthd_cd", "parl_cnd_arr", "meta_ver_no",
 ]
 

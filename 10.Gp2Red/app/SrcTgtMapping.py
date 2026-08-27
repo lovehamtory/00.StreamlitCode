@@ -5,7 +5,9 @@ import re
 from typing import Any, Callable
 
 import pandas as pd
+import sqlglot
 import streamlit as st
+from sqlglot import exp
 
 from SrcTgtArtifact import excel_bytes
 from SrcTgtConnection import connection_frame, connection_label, runtime_connection_values, selectable_connections, validate_mapping_connections
@@ -14,18 +16,18 @@ from SrcTgtLoadState import INCREMENT_METHODS, SYSTEM_COLUMN_FORMATS, normalize_
 
 
 TABLE_FIELDS = [
-    "MPG_ID", "PRJ_CD", "SBJ_AREA_CD", "SRC_CONN_ID", "SRC_SCH_NM", "SRC_TBL_NM",
-    "TGT_CONN_ID", "TGT_SCH_NM", "TGT_TBL_NM", "TGT_TBL_CMT", "LOAD_STS_CD", "SYS_COL_NM_ARR", "SYS_COL_FMT_CD", "INCR_MTHD_CD", "SRC_INCR_COL_NM_ARR", "PARL_MTHD_CD", "PARL_CND_ARR",
+    "MPG_ID", "PRJ_CD", "SBJ_AREA_CD", "TGT_CONN_ID", "TGT_SCH_NM", "TGT_TBL_NM", "TGT_TBL_CMT",
+    "SRC_CONN_ID", "SRC_SCH_NM", "SRC_TBL_NM", "LOAD_STS_CD", "SYS_COL_NM_ARR", "SYS_COL_FMT_CD", "INCR_MTHD_CD", "SRC_INCR_COL_NM_ARR", "PARL_MTHD_CD", "PARL_CND_ARR",
 ]
 
-COLUMN_FIELDS = [
-    "MPG_ID", "PRJ_CD", "SBJ_AREA_CD", "SRC_CONN_ID", "SRC_SCH_NM", "SRC_TBL_NM", "TGT_CONN_ID", "TGT_SCH_NM", "TGT_TBL_NM", "COL_ORD", "SRC_COL_NO", "SRC_COL_NM", "SRC_DATA_TYPE", "SRC_NULL_YN", "SRC_KEY_ROLE_CD", "TGT_COL_NO", "TGT_COL_NM", "TGT_COL_CMT", "TGT_DATA_TYPE", "TGT_NULL_YN", "TGT_KEY_ROLE_CD", "TRNSF_EXPR", "DFLT_EXPR", "SUM_VALD_YN", "HSH_VALD_YN",
-]
+COLUMN_PARENT_FIELDS = ["MPG_ID", "PRJ_CD", "SBJ_AREA_CD", "TGT_CONN_ID", "TGT_SCH_NM", "TGT_TBL_NM", "SRC_CONN_ID", "SRC_SCH_NM", "SRC_TBL_NM"]
+COLUMN_DETAIL_FIELDS = ["COL_ORD", "TGT_COL_NO", "TGT_COL_NM", "TGT_COL_CMT", "TGT_DATA_TYPE", "TGT_NULL_YN", "TGT_KEY_ROLE_CD", "COL_MPG_MTHD_CD", "TGT_EXPR", "DFLT_EXPR", "S3_COL_NM", "S3_DATA_TYPE", "SRC_EXPR", "SRC_REF_COL_NM_ARR", "SRC_COL_NO", "SRC_COL_NM", "SRC_DATA_TYPE", "SRC_NULL_YN", "SRC_KEY_ROLE_CD", "SUM_VALD_YN", "HSH_VALD_YN"]
+COLUMN_FIELDS = [*COLUMN_PARENT_FIELDS, *COLUMN_DETAIL_FIELDS]
 
 FIELD_LABELS = {
     "MPG_ID": "테이블매핑ID", "PRJ_CD": "프로젝트코드", "SBJ_AREA_CD": "주제영역코드", "SRC_CONN_ID": "원천접속ID", "SRC_SCH_NM": "원천스키마명", "SRC_TBL_NM": "원천테이블명",
     "TGT_CONN_ID": "대상접속ID", "TGT_SCH_NM": "대상스키마명", "TGT_TBL_NM": "대상테이블명", "TGT_TBL_CMT": "대상테이블설명", "LOAD_STS_CD": "적재상태", "SYS_COL_NM_ARR": "시스템컬럼명배열", "SYS_COL_FMT_CD": "시스템컬럼데이터형식", "INCR_MTHD_CD": "증분방식", "SRC_INCR_COL_NM_ARR": "원천증분컬럼명배열", "PARL_MTHD_CD": "S3병렬방식", "PARL_CND_ARR": "S3병렬조건",
-    "COL_ORD": "매핑순서", "SRC_COL_NO": "원천컬럼순번", "SRC_COL_NM": "원천컬럼명", "SRC_DATA_TYPE": "원천데이터타입", "SRC_NULL_YN": "원천NULL허용여부", "SRC_KEY_ROLE_CD": "원천키역할코드", "TGT_COL_NO": "대상컬럼순번", "TGT_COL_NM": "대상컬럼명", "TGT_COL_CMT": "대상컬럼설명", "TGT_DATA_TYPE": "대상데이터타입", "TGT_NULL_YN": "대상NULL허용여부", "TGT_KEY_ROLE_CD": "대상키역할코드", "TRNSF_EXPR": "변환SQL식", "DFLT_EXPR": "기본값SQL식", "SUM_VALD_YN": "SUM검증여부", "HSH_VALD_YN": "HASH검증여부",
+    "COL_ORD": "매핑순서", "TGT_COL_NO": "대상컬럼순번", "TGT_COL_NM": "대상컬럼명", "TGT_COL_CMT": "대상컬럼설명", "TGT_DATA_TYPE": "대상데이터타입", "TGT_NULL_YN": "대상NULL허용여부", "TGT_KEY_ROLE_CD": "대상키역할코드", "COL_MPG_MTHD_CD": "컬럼매핑방식", "TGT_EXPR": "이행적용SQL식", "DFLT_EXPR": "이행기본값SQL식", "S3_COL_NM": "S3중간컬럼명", "S3_DATA_TYPE": "S3중간데이터타입", "SRC_EXPR": "이관적용SQL식", "SRC_REF_COL_NM_ARR": "원천참조컬럼명배열", "SRC_COL_NO": "원천컬럼순번", "SRC_COL_NM": "원천컬럼명", "SRC_DATA_TYPE": "원천데이터타입", "SRC_NULL_YN": "원천NULL허용여부", "SRC_KEY_ROLE_CD": "원천키역할코드", "SUM_VALD_YN": "SUM검증여부", "HSH_VALD_YN": "HASH검증여부",
 }
 
 NATURAL_FIELDS = ["PRJ_CD", "SBJ_AREA_CD", "SRC_CONN_ID", "SRC_SCH_NM", "SRC_TBL_NM", "TGT_CONN_ID", "TGT_SCH_NM", "TGT_TBL_NM"]
@@ -130,8 +132,32 @@ def normalized_columns(frame: pd.DataFrame) -> list[dict[str, object]]:
         row["HSH_VALD_YN"] = boolean(row["HSH_VALD_YN"], False)
         if not integer(row["MPG_ID"], "MPG_ID") and any(not text(row[field]) for field in NATURAL_FIELDS):
             raise ValueError(f"컬럼매핑 {number}행은 테이블매핑ID 또는 원천·대상 테이블 식별값이 필요합니다.")
-        for field in ("SRC_COL_NM", "SRC_DATA_TYPE", "SRC_KEY_ROLE_CD", "TGT_COL_NM", "TGT_COL_CMT", "TGT_KEY_ROLE_CD", "TRNSF_EXPR", "DFLT_EXPR"):
+        for field in ("SRC_COL_NM", "SRC_DATA_TYPE", "SRC_KEY_ROLE_CD", "TGT_COL_NM", "TGT_COL_CMT", "TGT_KEY_ROLE_CD", "S3_COL_NM", "S3_DATA_TYPE", "SRC_EXPR", "TGT_EXPR", "DFLT_EXPR"):
             row[field] = text(row[field]) or None
+        row["COL_MPG_MTHD_CD"] = text(row["COL_MPG_MTHD_CD"]).upper() or "MOVE"
+        if row["COL_MPG_MTHD_CD"] not in {"MOVE", "CONST", "NULL", "EXPR"}:
+            raise ValueError(f"컬럼매핑 {number}행의 컬럼매핑방식은 MOVE, CONST, NULL, EXPR 중 하나여야 합니다.")
+        references = normalize_name_array(row["SRC_REF_COL_NM_ARR"], "원천참조컬럼명")
+        if row["COL_MPG_MTHD_CD"] == "MOVE":
+            if not row["SRC_COL_NM"]:
+                raise ValueError(f"컬럼매핑 {number}행의 MOVE 방식에는 원천컬럼명이 필요합니다.")
+            references = list(dict.fromkeys([row["SRC_COL_NM"], *references]))
+        elif row["COL_MPG_MTHD_CD"] == "CONST" and not row["TGT_EXPR"]:
+            raise ValueError(f"컬럼매핑 {number}행의 CONST 방식에는 이행적용SQL식이 필요합니다.")
+        elif row["COL_MPG_MTHD_CD"] == "EXPR" and not row["SRC_EXPR"] and not row["TGT_EXPR"]:
+            raise ValueError(f"컬럼매핑 {number}행의 EXPR 방식에는 이관 또는 이행 적용SQL식이 필요합니다.")
+        if row["COL_MPG_MTHD_CD"] in {"CONST", "NULL"} and references:
+            raise ValueError(f"컬럼매핑 {number}행의 {row['COL_MPG_MTHD_CD']} 방식에는 원천참조컬럼명을 입력할 수 없습니다.")
+        if row["COL_MPG_MTHD_CD"] == "NULL" and (row["SRC_EXPR"] or row["TGT_EXPR"]):
+            raise ValueError(f"컬럼매핑 {number}행의 NULL 방식에는 이관·이행 적용SQL식을 입력할 수 없습니다.")
+        requires_stage = row["COL_MPG_MTHD_CD"] not in {"CONST", "NULL"} and not row["TGT_EXPR"]
+        if requires_stage and not row["S3_COL_NM"]:
+            row["S3_COL_NM"] = row["SRC_COL_NM"] or row["TGT_COL_NM"]
+        if row["S3_COL_NM"] and not row["S3_DATA_TYPE"]:
+            row["S3_DATA_TYPE"] = row["SRC_DATA_TYPE"] or row["TGT_DATA_TYPE"]
+        if row["COL_MPG_MTHD_CD"] in {"CONST", "NULL"} and row["S3_COL_NM"]:
+            raise ValueError(f"컬럼매핑 {number}행의 {row['COL_MPG_MTHD_CD']} 방식에는 S3중간컬럼명을 입력할 수 없습니다.")
+        row["SRC_REF_COL_NM_ARR"] = json.dumps(references, ensure_ascii=False) if references else None
         row["TGT_DATA_TYPE"] = redshift_type(row["TGT_DATA_TYPE"])
         mapping_key = text(row["MPG_ID"]) or "|".join(text(row[field]) for field in NATURAL_FIELDS)
         target_name = text(row["TGT_COL_NM"]).upper()
@@ -206,14 +232,14 @@ def upsert_table(cursor: Any, schema_name: str, qualified: Callable[[str, str], 
     return current_id
 
 
-def record_mapping_change(cursor: Any, schema_name: str, qualified: Callable[[str, str], str], mapping_id_value: int, division: str, reason: str, after_value: dict[str, object]) -> None:
+def record_mapping_change(cursor: Any, schema_name: str, qualified: Callable[[str, str], str], mapping_id_value: int, division: str, reason: str, after_value: dict[str, object], before_value: dict[str, object] | None = None) -> None:
     cursor.execute(f"SELECT meta_ver_no FROM {qualified(schema_name, 'tb_mig_tbl_mpg')} WHERE mpg_id = %s", (mapping_id_value,))
     version_row = cursor.fetchone()
     if version_row is None:
         raise ValueError(f"테이블매핑을 찾을 수 없습니다: {mapping_id_value}")
     cursor.execute(
         f"INSERT INTO {qualified(schema_name, 'tb_mig_mpg_chg_hist')} (mpg_id, meta_ver_no, chg_dvsn_cd, chg_rsn, bf_val, af_val) VALUES (%s, %s, %s, %s, %s, %s)",
-        (mapping_id_value, int(version_row[0]), division, reason, None, json.dumps(after_value, ensure_ascii=False, default=str, sort_keys=True)),
+        (mapping_id_value, int(version_row[0]), division, reason, json.dumps(before_value, ensure_ascii=False, default=str, sort_keys=True) if before_value is not None else None, json.dumps(after_value, ensure_ascii=False, default=str, sort_keys=True)),
     )
 
 
@@ -274,8 +300,8 @@ def save_bundle(connect: Callable[[dict[str, Any]], Any], values: dict[str, Any]
                 if not replace_columns:
                     cursor.execute(f"UPDATE {table_name} SET active_yn = FALSE, upd_dtm = GETDATE() WHERE mpg_id = %s AND col_ord = %s AND active_yn = TRUE", (map_id, row["COL_ORD"]))
                 cursor.execute(
-                    f'''INSERT INTO {table_name} (mpg_id, col_ord, src_col_no, src_col_nm, src_data_type, src_null_yn, src_key_role_cd, tgt_col_no, tgt_col_nm, tgt_col_cmt, tgt_data_type, tgt_null_yn, tgt_key_role_cd, trnsf_expr, dflt_expr, sum_vald_yn, hsh_vald_yn, active_yn) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, TRUE)''',
-                    (map_id, row["COL_ORD"], row["SRC_COL_NO"], row["SRC_COL_NM"], row["SRC_DATA_TYPE"], row["SRC_NULL_YN"], row["SRC_KEY_ROLE_CD"], row["TGT_COL_NO"], row["TGT_COL_NM"], row["TGT_COL_CMT"], row["TGT_DATA_TYPE"], row["TGT_NULL_YN"], row["TGT_KEY_ROLE_CD"], row["TRNSF_EXPR"], row["DFLT_EXPR"], row["SUM_VALD_YN"], row["HSH_VALD_YN"]),
+                    f'''INSERT INTO {table_name} (mpg_id, col_ord, tgt_col_no, tgt_col_nm, tgt_col_cmt, tgt_data_type, tgt_null_yn, tgt_key_role_cd, col_mpg_mthd_cd, tgt_expr, dflt_expr, s3_col_nm, s3_data_type, src_expr, src_col_no, src_col_nm, src_data_type, src_null_yn, src_key_role_cd, src_ref_col_nm_arr, sum_vald_yn, hsh_vald_yn, active_yn) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, TRUE)''',
+                    (map_id, row["COL_ORD"], row["TGT_COL_NO"], row["TGT_COL_NM"], row["TGT_COL_CMT"], row["TGT_DATA_TYPE"], row["TGT_NULL_YN"], row["TGT_KEY_ROLE_CD"], row["COL_MPG_MTHD_CD"], row["TGT_EXPR"], row["DFLT_EXPR"], row["S3_COL_NM"], row["S3_DATA_TYPE"], row["SRC_EXPR"], row["SRC_COL_NO"], row["SRC_COL_NM"], row["SRC_DATA_TYPE"], row["SRC_NULL_YN"], row["SRC_KEY_ROLE_CD"], row["SRC_REF_COL_NM_ARR"], row["SUM_VALD_YN"], row["HSH_VALD_YN"]),
                 )
                 record_mapping_change(cursor, schema_name, qualified, map_id, "COL_MPG", "컬럼매핑 저장", row)
         connection.commit()
@@ -296,7 +322,7 @@ def load_upload(uploaded: Any) -> tuple[pd.DataFrame, pd.DataFrame]:
 
 
 def existing_columns(query_frame: Callable[..., pd.DataFrame], values: dict[str, Any], schema_name: str, qualified: Callable[[str, str], str], mapping_id: int) -> pd.DataFrame:
-    query = f'''SELECT col_ord AS "COL_ORD", src_col_no AS "SRC_COL_NO", src_col_nm AS "SRC_COL_NM", src_data_type AS "SRC_DATA_TYPE", src_null_yn AS "SRC_NULL_YN", src_key_role_cd AS "SRC_KEY_ROLE_CD", tgt_col_no AS "TGT_COL_NO", tgt_col_nm AS "TGT_COL_NM", tgt_col_cmt AS "TGT_COL_CMT", tgt_data_type AS "TGT_DATA_TYPE", tgt_null_yn AS "TGT_NULL_YN", tgt_key_role_cd AS "TGT_KEY_ROLE_CD", trnsf_expr AS "TRNSF_EXPR", dflt_expr AS "DFLT_EXPR", sum_vald_yn AS "SUM_VALD_YN", hsh_vald_yn AS "HSH_VALD_YN"
+    query = f'''SELECT col_ord AS "COL_ORD", tgt_col_no AS "TGT_COL_NO", tgt_col_nm AS "TGT_COL_NM", tgt_col_cmt AS "TGT_COL_CMT", tgt_data_type AS "TGT_DATA_TYPE", tgt_null_yn AS "TGT_NULL_YN", tgt_key_role_cd AS "TGT_KEY_ROLE_CD", col_mpg_mthd_cd AS "COL_MPG_MTHD_CD", tgt_expr AS "TGT_EXPR", dflt_expr AS "DFLT_EXPR", s3_col_nm AS "S3_COL_NM", s3_data_type AS "S3_DATA_TYPE", src_expr AS "SRC_EXPR", src_ref_col_nm_arr AS "SRC_REF_COL_NM_ARR", src_col_no AS "SRC_COL_NO", src_col_nm AS "SRC_COL_NM", src_data_type AS "SRC_DATA_TYPE", src_null_yn AS "SRC_NULL_YN", src_key_role_cd AS "SRC_KEY_ROLE_CD", sum_vald_yn AS "SUM_VALD_YN", hsh_vald_yn AS "HSH_VALD_YN"
                   FROM {qualified(schema_name, "tb_mig_col_mpg")}
                  WHERE mpg_id = %s AND active_yn = TRUE
                  ORDER BY col_ord'''
@@ -324,7 +350,7 @@ def source_columns(query_frame: Callable[..., pd.DataFrame], values: dict[str, A
     source = query_frame(values, query, (source_connection_id, standard_date, owner, table))
     if source.empty:
         raise ValueError("선택한 원천 레이아웃의 컬럼을 찾을 수 없습니다.")
-    result = pd.DataFrame(columns=COLUMN_FIELDS[9:])
+    result = pd.DataFrame(columns=COLUMN_DETAIL_FIELDS)
     for column in source.columns:
         result[column] = source[column]
     result["TGT_COL_NO"] = source["COL_ORD"]
@@ -333,11 +359,16 @@ def source_columns(query_frame: Callable[..., pd.DataFrame], values: dict[str, A
     result["TGT_DATA_TYPE"] = [redshift_type(data_type, data_length, character_multiple) for data_type, data_length in zip(source["SRC_DATA_TYPE"], source_lengths)]
     result["TGT_NULL_YN"] = source["SRC_NULL_YN"]
     result["TGT_KEY_ROLE_CD"] = source["SRC_KEY_ROLE_CD"]
-    result["TRNSF_EXPR"] = None
+    result["COL_MPG_MTHD_CD"] = "MOVE"
+    result["TGT_EXPR"] = None
     result["DFLT_EXPR"] = None
+    result["S3_COL_NM"] = source["SRC_COL_NM"]
+    result["S3_DATA_TYPE"] = source["SRC_DATA_TYPE"]
+    result["SRC_EXPR"] = None
+    result["SRC_REF_COL_NM_ARR"] = source["SRC_COL_NM"].map(lambda value: json.dumps([text(value)], ensure_ascii=False))
     result["SUM_VALD_YN"] = False
     result["HSH_VALD_YN"] = False
-    return result.loc[:, COLUMN_FIELDS[9:]]
+    return result.loc[:, COLUMN_DETAIL_FIELDS]
 
 
 def target_columns(query_frame: Callable[..., pd.DataFrame], values: dict[str, Any], schema_name: str, table_name: str) -> pd.DataFrame:
@@ -420,6 +451,11 @@ def render_single(maps: pd.DataFrame, values: dict[str, Any], schema_name: str, 
         with basic:
             prj_cd = st.text_input("프로젝트코드", value=form_value(current, "PRJ_CD"))
             sbj_area_cd = st.text_input("주제영역코드", value=form_value(current, "SBJ_AREA_CD"))
+            target_default = form_value(current, "TGT_CONN_ID", text(target_connections.iloc[0].conn_id)).upper()
+            tgt_conn_id = st.selectbox("대상접속ID", target_connections.conn_id.tolist(), index=target_connections.conn_id.tolist().index(target_default) if target_default in target_connections.conn_id.tolist() else 0, format_func=lambda value: connection_label(target_connections, value))
+            tgt_sch_nm = st.text_input("대상스키마명", value=form_value(current, "TGT_SCH_NM"))
+            tgt_tbl_nm = st.text_input("대상테이블명", value=form_value(current, "TGT_TBL_NM"))
+            tgt_tbl_cmt = st.text_area("대상테이블설명", value=text(source_snapshot.ENTITY) if source_snapshot is not None else form_value(current, "TGT_TBL_CMT"), height=80)
             if source_snapshot is not None:
                 src_conn_id = text(source_snapshot.SRC_CONN_ID).upper()
                 st.text_input("원천접속ID", value=connection_label(source_connections, src_conn_id), disabled=True)
@@ -428,11 +464,6 @@ def render_single(maps: pd.DataFrame, values: dict[str, Any], schema_name: str, 
                 src_conn_id = st.selectbox("원천접속ID", source_connections.conn_id.tolist(), index=source_connections.conn_id.tolist().index(source_default) if source_default in source_connections.conn_id.tolist() else 0, format_func=lambda value: connection_label(source_connections, value))
             src_sch_nm = st.text_input("원천스키마명", value=text(source_snapshot.OWNER) if source_snapshot is not None else form_value(current, "SRC_SCH_NM"), disabled=True)
             src_tbl_nm = st.text_input("원천테이블명", value=text(source_snapshot.TBL) if source_snapshot is not None else form_value(current, "SRC_TBL_NM"), disabled=True)
-            target_default = form_value(current, "TGT_CONN_ID", text(target_connections.iloc[0].conn_id)).upper()
-            tgt_conn_id = st.selectbox("대상접속ID", target_connections.conn_id.tolist(), index=target_connections.conn_id.tolist().index(target_default) if target_default in target_connections.conn_id.tolist() else 0, format_func=lambda value: connection_label(target_connections, value))
-            tgt_sch_nm = st.text_input("대상스키마명", value=form_value(current, "TGT_SCH_NM"))
-            tgt_tbl_nm = st.text_input("대상테이블명", value=form_value(current, "TGT_TBL_NM"))
-            tgt_tbl_cmt = st.text_area("대상테이블설명", value=text(source_snapshot.ENTITY) if source_snapshot is not None else form_value(current, "TGT_TBL_CMT"), height=80)
         with execution:
             st.selectbox("적재 상태", [form_value(current, "LOAD_STS_CD", "FULL") or "FULL"], disabled=True)
             system_columns = st.text_input("시스템 컬럼명", value=form_value(current, "SYS_COL_NM_ARR"), placeholder='["생성일시", "수정일시"]')
@@ -444,8 +475,9 @@ def render_single(maps: pd.DataFrame, values: dict[str, Any], schema_name: str, 
             parl_mthd_cd = st.selectbox("S3 병렬 방식", ["NONE", "WHERE"], index=["NONE", "WHERE"].index(form_value(current, "PARL_MTHD_CD", "NONE").upper()) if form_value(current, "PARL_MTHD_CD", "NONE").upper() in {"NONE", "WHERE"} else 0)
             parl_cnd_arr = st.text_area("S3 병렬 조건", value=form_value(current, "PARL_CND_ARR"), disabled=parl_mthd_cd != "WHERE", placeholder='["abc_dt BETWEEN \'19000101\' AND \'20001231\'", "abc_dt BETWEEN \'20010101\' AND \'20101231\'"]')
         st.markdown("##### 컬럼 매핑")
-        edited = st.data_editor(existing, num_rows="dynamic", hide_index=True, key=f"single_column_editor_{selected}", column_config={"COL_ORD": st.column_config.NumberColumn("매핑순서", min_value=1, step=1), "SRC_COL_NO": st.column_config.NumberColumn("원천컬럼순번", min_value=1, step=1), "SRC_COL_NM": "원천컬럼명", "SRC_DATA_TYPE": "원천데이터타입", "SRC_NULL_YN": st.column_config.CheckboxColumn("원천NULL허용여부"), "SRC_KEY_ROLE_CD": "원천키역할코드", "TGT_COL_NO": st.column_config.NumberColumn("대상컬럼순번", min_value=1, step=1), "TGT_COL_NM": "대상컬럼명", "TGT_COL_CMT": "대상컬럼설명", "TGT_DATA_TYPE": "대상데이터타입", "TGT_NULL_YN": st.column_config.CheckboxColumn("대상NULL허용여부"), "TGT_KEY_ROLE_CD": "대상키역할코드", "TRNSF_EXPR": "변환SQL식", "DFLT_EXPR": "기본값SQL식", "SUM_VALD_YN": st.column_config.CheckboxColumn("SUM검증여부"), "HSH_VALD_YN": st.column_config.CheckboxColumn("HASH검증여부")})
+        edited = st.data_editor(existing, num_rows="dynamic", hide_index=True, key=f"single_column_editor_{selected}", column_config={"COL_ORD": st.column_config.NumberColumn("매핑순서", min_value=1, step=1), "TGT_COL_NO": st.column_config.NumberColumn("대상컬럼순번", min_value=1, step=1), "TGT_COL_NM": "대상컬럼명", "TGT_COL_CMT": "대상컬럼설명", "TGT_DATA_TYPE": "대상데이터타입", "TGT_NULL_YN": st.column_config.CheckboxColumn("대상NULL허용여부"), "TGT_KEY_ROLE_CD": "대상키역할코드", "COL_MPG_MTHD_CD": st.column_config.SelectboxColumn("컬럼매핑방식", options=["MOVE", "CONST", "NULL", "EXPR"], required=True), "TGT_EXPR": "이행적용SQL식", "DFLT_EXPR": "이행기본값SQL식", "S3_COL_NM": "S3중간컬럼명", "S3_DATA_TYPE": "S3중간데이터타입", "SRC_EXPR": "이관적용SQL식", "SRC_REF_COL_NM_ARR": "원천참조컬럼명배열", "SRC_COL_NO": st.column_config.NumberColumn("원천컬럼순번", min_value=1, step=1), "SRC_COL_NM": "원천컬럼명", "SRC_DATA_TYPE": "원천데이터타입", "SRC_NULL_YN": st.column_config.CheckboxColumn("원천NULL허용여부"), "SRC_KEY_ROLE_CD": "원천키역할코드", "SUM_VALD_YN": st.column_config.CheckboxColumn("SUM검증여부"), "HSH_VALD_YN": st.column_config.CheckboxColumn("HASH검증여부")})
         automatic = st.form_submit_button("대상 구조 자동 반영", icon=":material/auto_fix_high:")
+        generated = st.form_submit_button("SQL 생성", icon=":material/code:")
         submitted = st.form_submit_button("테이블·컬럼 매핑 저장", icon=":material/save:", type="primary")
     if automatic:
         try:
@@ -456,7 +488,7 @@ def render_single(maps: pd.DataFrame, values: dict[str, Any], schema_name: str, 
             st.rerun()
         except Exception as error:
             st.error(f"대상 구조 자동 반영 실패: {error}", icon=":material/error:")
-    if submitted:
+    if submitted or generated:
         try:
             source = {} if current is None else {field: current[field.lower()] for field in TABLE_FIELDS if field.lower() in current.index}
             source.update({"MPG_ID": None if current is None else int(selected), "PRJ_CD": prj_cd, "SBJ_AREA_CD": sbj_area_cd, "SRC_CONN_ID": src_conn_id, "SRC_SCH_NM": src_sch_nm, "SRC_TBL_NM": src_tbl_nm, "TGT_CONN_ID": tgt_conn_id, "TGT_SCH_NM": tgt_sch_nm, "TGT_TBL_NM": tgt_tbl_nm, "TGT_TBL_CMT": tgt_tbl_cmt, "LOAD_STS_CD": "FULL" if current is None else form_value(current, "LOAD_STS_CD", "FULL"), "SYS_COL_NM_ARR": system_columns, "SYS_COL_FMT_CD": system_format, "INCR_MTHD_CD": increment_method, "SRC_INCR_COL_NM_ARR": increment_columns, "PARL_MTHD_CD": parl_mthd_cd, "PARL_CND_ARR": parl_cnd_arr})
@@ -468,7 +500,17 @@ def render_single(maps: pd.DataFrame, values: dict[str, Any], schema_name: str, 
             column_input["MPG_ID"] = table["MPG_ID"]
             columns = normalized_columns(column_input)
             save_bundle(connect, values, schema_name, qualified, [table], columns, True)
+            if generated:
+                with connect(values) as connection:
+                    with connection.cursor() as cursor:
+                        saved_id = mapping_id(cursor, schema_name, qualified, table)
+                if saved_id is None:
+                    raise ValueError("저장한 테이블매핑 ID를 확인할 수 없습니다.")
+                source_sql, target_sql = sql_templates(pd.Series({field.lower(): value for field, value in table.items()}), pd.DataFrame(columns))
+                save_sql_overrides(connect, values, schema_name, qualified, int(saved_id), source_sql, target_sql, columns)
             st.session_state.pop(automatic_key, None)
+            if generated:
+                st.success("이관·이행 SQL을 생성하고 이력과 함께 저장했습니다.", icon=":material/check_circle:")
             st.rerun()
         except Exception as error:
             st.error(f"매핑 저장 실패: {error}", icon=":material/error:")
@@ -495,6 +537,242 @@ def render_upload(values: dict[str, Any], schema_name: str, connect: Callable[[d
             st.success(f"테이블매핑 {saved_tables:,}건, 컬럼매핑 {saved_columns:,}건을 반영했습니다.", icon=":material/check_circle:")
         except Exception as error:
             st.error(f"일괄 반영 실패: {error}", icon=":material/error:")
+
+
+def sql_identifier(value: object) -> str:
+    name = text(value)
+    if not name or "\x00" in name:
+        raise ValueError("SQL 식별자를 확인하십시오.")
+    return '"' + name.replace('"', '""') + '"'
+
+
+def sql_value(row: dict[str, object]) -> str:
+    method = text(row.get("COL_MPG_MTHD_CD")).upper() or "MOVE"
+    expression = text(row.get("TGT_EXPR"))
+    stage_name = text(row.get("S3_COL_NM"))
+    if expression:
+        value = expression
+    elif method == "NULL":
+        value = "CAST(NULL AS " + redshift_type(row.get("TGT_DATA_TYPE")) + ")"
+    elif stage_name:
+        value = "S." + sql_identifier(stage_name)
+    elif method in {"CONST", "EXPR"}:
+        raise ValueError(f"{method} 컬럼매핑에는 이행적용SQL식 또는 S3중간컬럼명이 필요합니다.")
+    elif method == "MOVE":
+        raise ValueError("MOVE 컬럼매핑에는 S3중간컬럼명이 필요합니다.")
+    else:
+        raise ValueError("컬럼매핑방식을 확인하십시오.")
+    default = text(row.get("DFLT_EXPR"))
+    return f"COALESCE({value}, {default})" if default else value
+
+
+def sql_references(row: dict[str, object]) -> list[str]:
+    if text(row.get("COL_MPG_MTHD_CD")).upper() in {"CONST", "NULL"}:
+        return []
+    values = normalize_name_array(row.get("SRC_REF_COL_NM_ARR"), "원천참조컬럼명")
+    source_name = text(row.get("SRC_COL_NM"))
+    return list(dict.fromkeys([source_name, *values])) if source_name else values
+
+
+def source_projection(row: dict[str, object]) -> str:
+    method = text(row.get("COL_MPG_MTHD_CD")).upper() or "MOVE"
+    stage_name = text(row.get("S3_COL_NM"))
+    if not stage_name:
+        if method in {"CONST", "NULL"}:
+            return ""
+        raise ValueError(f"{method} 컬럼매핑에는 S3중간컬럼명이 필요합니다.")
+    expression = text(row.get("SRC_EXPR"))
+    source_name = text(row.get("SRC_COL_NM"))
+    if not expression:
+        if not source_name:
+            raise ValueError(f"S3중간컬럼 {stage_name}의 이관 SQL식 또는 원천컬럼명이 필요합니다.")
+        expression = "S." + sql_identifier(source_name)
+    return expression + " AS " + sql_identifier(stage_name)
+
+
+def sql_templates(table: pd.Series, columns: pd.DataFrame) -> tuple[str, str]:
+    if columns.empty:
+        raise ValueError("컬럼매핑을 한 건 이상 입력하십시오.")
+    rows = columns.to_dict(orient="records")
+    source_table = sql_identifier(table.src_sch_nm) + "." + sql_identifier(table.src_tbl_nm)
+    source_values = ", ".join(value for value in (source_projection(row) for row in rows) if value) or '1 AS "MIG_DUMMY"'
+    source_sql = "SELECT " + source_values + " FROM " + source_table + " AS S WHERE __SRC_WHERE_CND__"
+    target = sql_identifier(table.tgt_sch_nm) + "." + sql_identifier(table.tgt_tbl_nm)
+    target_columns = ", ".join(sql_identifier(row["TGT_COL_NM"]) for row in rows)
+    insert_sql = "INSERT INTO " + target + " (" + target_columns + ") SELECT " + ", ".join(sql_value(row) for row in rows) + " FROM __MIG_STAGE__ AS S"
+    if text(table.load_sts_cd).upper() == "FULL":
+        return source_sql, "TRUNCATE TABLE " + target + ";\n" + insert_sql + ";"
+    source_keys = normalize_name_array(table.src_incr_col_nm_arr, "원천증분컬럼명", required=True)
+    by_source = {text(row["SRC_COL_NM"]).upper(): row for row in rows}
+    target_keys: list[str] = []
+    staged_keys: list[str] = []
+    for source_key in source_keys:
+        row = by_source.get(source_key.upper())
+        if row is None:
+            raise ValueError(f"원천 증분 컬럼의 대상 컬럼매핑이 없습니다: {source_key}")
+        target_key = text(row["TGT_COL_NM"])
+        target_keys.append(target_key)
+        staged_keys.append(sql_value(row) + " AS " + sql_identifier(target_key))
+    delete_sql = "DELETE FROM " + target + " AS T USING (SELECT DISTINCT " + ", ".join(staged_keys) + " FROM __MIG_STAGE__ AS S) AS S WHERE " + " AND ".join("T." + sql_identifier(value) + " = S." + sql_identifier(value) for value in target_keys)
+    return source_sql, delete_sql + ";\n" + insert_sql + ";"
+
+
+def sql_statements(value: str, label: str) -> list[exp.Expression]:
+    try:
+        statements = sqlglot.parse(value, read="redshift")
+    except sqlglot.errors.ParseError as error:
+        raise ValueError(f"{label} 문법을 확인하십시오: {error}") from error
+    if not statements:
+        raise ValueError(f"{label}이 비어 있습니다.")
+    return statements
+
+
+def select_count(statement: exp.Expression, label: str) -> int:
+    select = statement if isinstance(statement, exp.Select) else statement.find(exp.Select)
+    if select is None:
+        raise ValueError(f"{label}에는 SELECT 문이 필요합니다.")
+    if any(isinstance(item, exp.Star) or item.find(exp.Star) is not None for item in select.expressions):
+        raise ValueError(f"{label}에는 * 대신 명시 컬럼을 사용하십시오.")
+    return len(select.expressions)
+
+
+def validate_sql_pair(source_sql: object, target_sql: object, columns: pd.DataFrame) -> None:
+    source_value = text(source_sql)
+    target_value = text(target_sql)
+    if not source_value or not target_value:
+        raise ValueError("이관 SQL과 이행 SQL을 모두 저장하십시오.")
+    if "__SRC_WHERE_CND__" not in source_value:
+        raise ValueError("이관 SQL에는 __SRC_WHERE_CND__ 치환값이 필요합니다.")
+    if "__MIG_STAGE__" not in target_value:
+        raise ValueError("이행 SQL에는 __MIG_STAGE__ 치환값이 필요합니다.")
+    source_statements = sql_statements(source_value, "이관 SQL")
+    if len(source_statements) != 1:
+        raise ValueError("이관 SQL은 SELECT 문 한 개여야 합니다.")
+    expected_source = max(sum(bool(text(row.get("S3_COL_NM"))) for row in columns.to_dict(orient="records")), 1)
+    actual_source = select_count(source_statements[0], "이관 SQL")
+    if actual_source != expected_source:
+        raise ValueError(f"이관 SQL SELECT 컬럼수({actual_source})와 S3중간컬럼수({expected_source})가 다릅니다.")
+    inserts = [statement for statement in sql_statements(target_value, "이행 SQL") if isinstance(statement, exp.Insert)]
+    if len(inserts) != 1:
+        raise ValueError("이행 SQL에는 INSERT 문 한 개가 필요합니다.")
+    insert = inserts[0]
+    if not isinstance(insert.this, exp.Schema):
+        raise ValueError("이행 SQL INSERT에는 대상 컬럼 목록이 필요합니다.")
+    expected_target = len(columns)
+    actual_target = len(insert.this.expressions)
+    actual_select = select_count(insert.expression, "이행 SQL INSERT")
+    if actual_target != expected_target or actual_select != expected_target:
+        raise ValueError(f"이행 SQL 대상·SELECT 컬럼수({actual_target}/{actual_select})와 컬럼매핑수({expected_target})가 다릅니다.")
+
+
+def read_sql_overrides(query_frame: Callable[..., pd.DataFrame], values: dict[str, Any], schema_name: str, qualified: Callable[[str, str], str], mapping_id_value: int) -> pd.Series:
+    frame = query_frame(values, f"SELECT src_ext_sql, tgt_load_sql FROM {qualified(schema_name, 'tb_mig_tbl_mpg')} WHERE mpg_id = %s AND active_yn = TRUE", (mapping_id_value,))
+    if len(frame) != 1:
+        raise ValueError("활성 테이블매핑을 찾을 수 없습니다.")
+    return frame.iloc[0]
+
+
+def save_sql_overrides(connect: Callable[[dict[str, Any]], Any], values: dict[str, Any], schema_name: str, qualified: Callable[[str, str], str], mapping_id_value: int, source_sql: object, target_sql: object, columns: pd.DataFrame) -> None:
+    source_value = text(source_sql) or None
+    target_value = text(target_sql) or None
+    validate_sql_pair(source_value, target_value, columns)
+    with connect(values) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(f"SELECT src_ext_sql, tgt_load_sql FROM {qualified(schema_name, 'tb_mig_tbl_mpg')} WHERE mpg_id = %s AND active_yn = TRUE", (mapping_id_value,))
+            current = cursor.fetchone()
+            if current is None:
+                raise ValueError("활성 테이블매핑을 찾을 수 없습니다.")
+            before_value = {"SRC_EXT_SQL": text(current[0]) or None, "TGT_LOAD_SQL": text(current[1]) or None}
+            after_value = {"SRC_EXT_SQL": source_value, "TGT_LOAD_SQL": target_value}
+            cursor.execute(f"UPDATE {qualified(schema_name, 'tb_mig_tbl_mpg')} SET src_ext_sql = %s, tgt_load_sql = %s, meta_ver_no = meta_ver_no + 1, upd_dtm = GETDATE() WHERE mpg_id = %s AND active_yn = TRUE", (source_value, target_value, mapping_id_value))
+            if cursor.rowcount != 1:
+                raise ValueError("활성 테이블매핑을 찾을 수 없습니다.")
+            record_mapping_change(cursor, schema_name, qualified, mapping_id_value, "SQL_MPG", "실행SQL 저장", after_value, before_value)
+        connection.commit()
+
+
+def sql_history(query_frame: Callable[..., pd.DataFrame], values: dict[str, Any], schema_name: str, qualified: Callable[[str, str], str], mapping_id_value: int) -> pd.DataFrame:
+    return query_frame(values, f'''SELECT mpg_chg_hist_id AS "이력ID", meta_ver_no AS "메타버전", chg_rsn AS "변경사유", bf_val AS "이전SQL", af_val AS "변경SQL", crt_dtm AS "변경일시"
+                                   FROM {qualified(schema_name, 'tb_mig_mpg_chg_hist')}
+                                  WHERE mpg_id = %s AND chg_dvsn_cd = 'SQL_MPG'
+                                  ORDER BY mpg_chg_hist_id DESC''', (mapping_id_value,))
+
+
+def restore_sql_history(connect: Callable[[dict[str, Any]], Any], values: dict[str, Any], schema_name: str, qualified: Callable[[str, str], str], mapping_id_value: int, history_id: int) -> None:
+    with connect(values) as connection:
+        with connection.cursor() as cursor:
+            cursor.execute(f"SELECT src_ext_sql, tgt_load_sql FROM {qualified(schema_name, 'tb_mig_tbl_mpg')} WHERE mpg_id = %s AND active_yn = TRUE", (mapping_id_value,))
+            current = cursor.fetchone()
+            cursor.execute(f"SELECT af_val FROM {qualified(schema_name, 'tb_mig_mpg_chg_hist')} WHERE mpg_chg_hist_id = %s AND mpg_id = %s AND chg_dvsn_cd = 'SQL_MPG'", (history_id, mapping_id_value))
+            saved = cursor.fetchone()
+            if current is None or saved is None:
+                raise ValueError("복원할 SQL 이력을 찾을 수 없습니다.")
+            try:
+                restored = json.loads(text(saved[0]) or "{}")
+            except json.JSONDecodeError as error:
+                raise ValueError("복원 SQL 이력 형식이 올바르지 않습니다.") from error
+            source_value = text(restored.get("SRC_EXT_SQL")) or None
+            target_value = text(restored.get("TGT_LOAD_SQL")) or None
+            before_value = {"SRC_EXT_SQL": text(current[0]) or None, "TGT_LOAD_SQL": text(current[1]) or None}
+            after_value = {"SRC_EXT_SQL": source_value, "TGT_LOAD_SQL": target_value}
+            cursor.execute(f"UPDATE {qualified(schema_name, 'tb_mig_tbl_mpg')} SET src_ext_sql = %s, tgt_load_sql = %s, meta_ver_no = meta_ver_no + 1, upd_dtm = GETDATE() WHERE mpg_id = %s AND active_yn = TRUE", (source_value, target_value, mapping_id_value))
+            record_mapping_change(cursor, schema_name, qualified, mapping_id_value, "SQL_MPG", f"실행SQL 이력 {history_id} 복원", after_value, before_value)
+        connection.commit()
+
+
+def render_sql_editor(maps: pd.DataFrame, values: dict[str, Any], schema_name: str, query_frame: Callable[..., pd.DataFrame], connect: Callable[[dict[str, Any]], Any], qualified: Callable[[str, str], str]) -> None:
+    if maps.empty:
+        st.info("SQL을 생성할 테이블매핑이 없습니다.", icon=":material/info:")
+        return
+    labels = {int(row.mpg_id): f"{int(row.mpg_id)} · {text(row.tgt_sch_nm)}.{text(row.tgt_tbl_nm)} ← {text(row.src_sch_nm)}.{text(row.src_tbl_nm)}" for row in maps.itertuples(index=False)}
+    selected = st.selectbox("테이블매핑", list(labels), format_func=lambda value: labels[value], key="sql_mapping_id")
+    table = maps.loc[maps.mpg_id.eq(selected)].iloc[0]
+    try:
+        columns = existing_columns(query_frame, values, schema_name, qualified, int(selected))
+        source_auto, target_auto = sql_templates(table, columns)
+        saved = read_sql_overrides(query_frame, values, schema_name, qualified, int(selected))
+    except Exception as error:
+        st.error(f"SQL 생성 실패: {error}", icon=":material/error:")
+        return
+    editor_tab, history_tab = st.tabs(["이관·이행 SQL", "SQL 이력"])
+    with editor_tab:
+        source_mode = st.segmented_control("SRC→S3 이관 SQL", ["자동", "수정"], default="수정" if text(saved.src_ext_sql) else "자동", key=f"source_sql_mode_{selected}")
+        if source_mode == "수정":
+            source_sql = st.text_area("SRC→S3 이관 SQL", value=text(saved.src_ext_sql) or source_auto, height=260, key=f"source_sql_{selected}")
+        else:
+            source_sql = source_auto
+            st.code(source_auto, language="sql")
+        target_mode = st.segmented_control("S3→TGT 이행 SQL", ["자동", "수정"], default="수정" if text(saved.tgt_load_sql) else "자동", key=f"target_sql_mode_{selected}")
+        if target_mode == "수정":
+            target_sql = st.text_area("S3→TGT 이행 SQL", value=text(saved.tgt_load_sql) or target_auto, height=360, key=f"target_sql_{selected}")
+        else:
+            target_sql = target_auto
+            st.code(target_auto, language="sql")
+        if st.button("SQL 저장", type="primary", icon=":material/save:", key=f"save_sql_{selected}"):
+            try:
+                save_sql_overrides(connect, values, schema_name, qualified, int(selected), source_sql, target_sql, columns)
+                st.success("이관·이행 SQL을 저장했습니다.", icon=":material/check_circle:")
+                st.rerun()
+            except Exception as error:
+                st.error(f"실행 SQL 저장 실패: {error}", icon=":material/error:")
+    with history_tab:
+        try:
+            history = sql_history(query_frame, values, schema_name, qualified, int(selected))
+            if history.empty:
+                st.info("저장된 SQL 이력이 없습니다.", icon=":material/info:")
+                return
+            st.dataframe(history[["이력ID", "메타버전", "변경사유", "변경일시"]], hide_index=True)
+            history_id = st.selectbox("복원 SQL 이력", history["이력ID"].astype(int).tolist(), format_func=lambda value: f"{value} · {history.loc[history['이력ID'].eq(value)].iloc[0]['변경일시']}", key=f"restore_sql_history_{selected}")
+            selected_history = history.loc[history["이력ID"].eq(history_id)].iloc[0]
+            st.code(text(selected_history["변경SQL"]), language="json")
+            if st.button("선택 SQL 복원", type="primary", icon=":material/restore:", key=f"restore_sql_{selected}"):
+                restored = json.loads(text(selected_history["변경SQL"]) or "{}")
+                validate_sql_pair(restored.get("SRC_EXT_SQL"), restored.get("TGT_LOAD_SQL"), columns)
+                restore_sql_history(connect, values, schema_name, qualified, int(selected), int(history_id))
+                st.success("선택 SQL 이력으로 복원했습니다.", icon=":material/check_circle:")
+                st.rerun()
+        except Exception as error:
+            st.error(f"SQL 이력 처리 실패: {error}", icon=":material/error:")
 
 
 def render_load_transition(maps: pd.DataFrame, values: dict[str, Any], schema_name: str, connect: Callable[[dict[str, Any]], Any], qualified: Callable[[str, str], str]) -> None:
@@ -544,10 +822,12 @@ def render_load_transition(maps: pd.DataFrame, values: dict[str, Any], schema_na
 
 
 def render_mapping_workspace(maps: pd.DataFrame, values: dict[str, Any], schema_name: str, query_frame: Callable[..., pd.DataFrame], connect: Callable[[dict[str, Any]], Any], qualified: Callable[[str, str], str]) -> None:
-    mode = st.segmented_control("매핑 업무", ["📝 단건 등록·수정", "🔄 적재상태 전환", "📤 일괄 업로드"], default="📝 단건 등록·수정", label_visibility="collapsed")
-    if mode == "📝 단건 등록·수정":
+    mapping_tab, sql_tab, transition_tab, upload_tab = st.tabs(["매핑", "SQL 생성·수정", "적재상태 전환", "일괄 업로드"])
+    with mapping_tab:
         render_single(maps, values, schema_name, query_frame, connect, qualified)
-    elif mode == "🔄 적재상태 전환":
+    with sql_tab:
+        render_sql_editor(maps, values, schema_name, query_frame, connect, qualified)
+    with transition_tab:
         render_load_transition(maps, values, schema_name, connect, qualified)
-    else:
+    with upload_tab:
         render_upload(values, schema_name, connect, qualified)

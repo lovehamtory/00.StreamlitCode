@@ -16,12 +16,11 @@
                            Airflow 실행 ── 실행로그·검증결과 ── 산출물
 ```
 
-- 주제영역은 `A01`, `A010001`처럼 등록하며 DAG 분할 단위입니다. 상위 주제영역은 분류용이고, 자동 선후행 오케스트레이션에는 사용하지 않습니다.
+- 주제영역은 `A01`, `A010001`처럼 등록하며 DAG 분할 단위입니다.
 - 전체 이관은 주제영역별로 `원천→S3`, `S3→대상` DAG를 각각 생성합니다.
 - 증분은 테이블별로 `원천→S3`, `S3→대상`, 두 단계를 연결한 통합 DAG를 각각 생성합니다.
-- 일회성 재적재는 기존 FULL/INCR 상태를 바꾸지 않는 별도 테이블 DAG입니다.
 - 검증은 `SRC→S3`, `S3→TGT` 두 구간으로 실행하며 COUNT는 필수, SUM/HASH는 컬럼 매핑의 Y/N으로 처리합니다.
-- S3 파일은 대상 접속의 S3 기준경로 하위에 Parquet으로 생성합니다.
+- S3는 FULL·INCR을 분리한 Parquet 기준본이며, 대상 이행은 실행회차의 검증 완료 매니페스트만 사용합니다.
 
 ## 2. 메뉴와 사용 순서
 
@@ -37,8 +36,6 @@
 | 8 | Airflow | 파일 배포, Connection/Variable 설정, 실행 순서 결정 | 실제 이관 실행 |
 | 9 | 실행 현황·검증 | 상태·건수·오류·검증 결과 확인 | 보정 대상 식별 |
 | 10 | 산출물 | 정의서·테스트·검증 결과서 생성 | Excel 파일 생성 |
-
-화면은 접속이 없더라도 열립니다. 조회·저장·생성 버튼을 누르는 시점에만 메타 연결을 사용합니다.
 
 ## 3. 설치와 화면 실행
 
@@ -132,7 +129,7 @@ Redshift 대상 접속은 한 건만 등록합니다. 그 접속의 S3 기준경
 
 원천 수집은 현재 Greenplum 카탈로그를 사용합니다. Oracle·MSSQL 원천은 동일한 `TB_MIG_SRC_LAYOUT` 형식으로 업로드 또는 수집 모듈을 추가한 뒤 사용합니다.
 
-타입 변환의 기본 규칙은 문자형 `VARCHAR(원천길이 × 접속별 배수)`, 일반 수치형 `DECIMAL`, 날짜·시간형 `TIMESTAMP`입니다. Redshift가 동일 타입을 지원하는 BOOLEAN·BIT 등은 유지합니다. 대상 테이블·컬럼명과 `TRNSF_EXPR`은 매핑값을 그대로 사용하므로, 한글 원천명과 표준 영문 대상명을 분리해 관리할 수 있습니다.
+타입 변환의 기본 규칙은 문자형 `VARCHAR(원천길이 × 접속별 배수)`, 일반 수치형 `DECIMAL`, 날짜·시간형 `TIMESTAMP`입니다. Redshift가 동일 타입을 지원하는 BOOLEAN·BIT 등은 유지합니다. 대상 테이블·컬럼명과 이행 적용SQL식, S3 중간컬럼, 이관 적용SQL식은 각각 분리해 관리하므로 한글 원천명과 표준 영문 대상명을 분리할 수 있습니다.
 
 ## 8. SRC·TGT 매핑
 
@@ -156,7 +153,56 @@ Redshift 대상 접속은 한 건만 등록합니다. 그 접속의 S3 기준경
 ["PK1", "PK2"]
 ```
 
-생성 DAG는 시스템 컬럼 배열을 `OR`로 연결해 영향을 받은 원천 증분키를 찾습니다. 예를 들어 `STD_DT IN (SELECT STD_DT ... WHERE 생성일시 >= 기준값 OR 변경일시 >= 기준값)`을 생성합니다. S3에는 원천 컬럼명 그대로 적재하고, 대상 적재는 컬럼매핑의 대상 컬럼명·변환식·기본값식을 사용합니다. `FULL`은 `TRUNCATE TABLE` 후 `INSERT`합니다. `PK_MERGE`와 `APPEND`는 모두 컬럼매핑으로 변환된 대상 증분키 범위를 `DELETE`한 뒤 `INSERT`합니다. SQL `MERGE` 문은 생성하지 않습니다.
+### 컬럼 매핑 방식
+
+컬럼매핑은 대상 컬럼을 먼저 정의합니다. `TB_MIG_COL_MPG`는 `MPG_ID`로 테이블매핑과 연결하며, 컬럼매핑 업로드에 `MPG_ID`가 없으면 원천·대상 테이블 식별값으로 해당 테이블매핑을 찾습니다.
+
+| 방식 | 이행 적용SQL식 | S3 중간컬럼 | 이관 적용SQL식 |
+| --- | --- | --- | --- |
+| `MOVE` | 선택 | 필수. 기본은 원천 컬럼명 | 선택. 원천 함수·조인식 |
+| `CONST` | 필수. 예: `'Y'`, `0` | 입력하지 않음 | 입력하지 않음 |
+| `NULL` | 입력하지 않음 | 입력하지 않음 | 입력하지 않음 |
+| `EXPR` | 이관 또는 이행 중 한 곳에 필수 | 이관식 결과 또는 이행식 입력값 | 원천 함수·조인식 |
+
+`SRC_EXPR`은 SRC→S3 SQL에서만, `TGT_EXPR`은 S3→TGT SQL에서만 사용합니다. S3 중간컬럼은 두 SQL의 계약이며, 기본 1:1 생성에서는 원천 컬럼명으로 자동 채워집니다. 이관 SQL에 원천 전용 함수·조인·복호화가 있으면 그 결과에 S3 중간컬럼 별칭을 붙이고, 이행 SQL은 그 S3 컬럼만 사용합니다.
+
+```text
+["CUST_NO", "CUST_NM"]
+```
+
+룩업, 시퀀스, 조건분기, 마스킹, 형변환은 별도 방식으로 늘리지 않고 `EXPR`의 SQL식으로 처리합니다. 대상 테이블의 DDL 기본값은 컬럼매핑방식이 아니며, `DFLT_EXPR`은 MOVE·산식 결과가 NULL일 때 적용할 기본값 SQL식입니다.
+
+### SQL 생성·수정
+
+매핑 그리드의 `SQL 생성`은 현재 컬럼매핑에서 SRC→S3 이관 SQL과 S3→TGT 이행 SQL을 각각 1:1로 생성해 저장합니다. 기존 SQL은 이력에 남으므로 언제든 복원할 수 있습니다. SQL 탭에서는 두 SQL을 독립적으로 수정한 뒤 `SQL 저장`으로 반영합니다.
+
+생성된 DAG는 SQL 본문을 파일에 고정하지 않고 실행할 때마다 `TB_MIG_TBL_MPG.SRC_EXT_SQL`, `TB_MIG_TBL_MPG.TGT_LOAD_SQL`을 조회합니다. 따라서 수정 SQL을 저장하면 해당 DAG 파일을 다시 생성하지 않아도 다음 실행부터 수정 SQL을 사용합니다.
+
+수정 SQL은 `TB_MIG_MPG_CHG_HIST`에 이전 SQL과 변경 SQL을 함께 저장합니다. `SQL 이력` 탭에서 원하는 이력을 선택해 복원할 수 있으며, 복원 동작도 새로운 SQL 이력으로 남습니다.
+
+| SQL | 필수 치환값 | 용도 |
+| --- | --- | --- |
+| 원천 추출 SQL | `__SRC_WHERE_CND__` | 증분 기준·수동 재작업 조건·병렬 조건 반영 |
+| 대상 적재 SQL | `__MIG_STAGE__` | 원천 레이아웃 S3 스테이지 참조 |
+| 대상 적재 SQL | `__TGT_TABLE__` | 현재 대상 스키마·테이블명으로 자동 치환 |
+
+이관 SQL에는 조인·룩업·원천 함수·복호화 등을, 이행 SQL에는 ETL 적재일시·대상 기본값·Redshift 전용 식을 작성할 수 있습니다. 저장 시 이관 SQL의 SELECT 컬럼수와 S3 중간컬럼수, 이행 SQL의 INSERT 대상·SELECT 컬럼수와 컬럼매핑수가 일치하는지 검증합니다. `*`는 허용하지 않습니다.
+
+생성 DAG는 시스템 컬럼 배열을 `OR`로 연결해 영향을 받은 원천 증분키를 찾습니다. 예를 들어 `STD_DT IN (SELECT STD_DT ... WHERE 생성일시 >= 기준값 OR 변경일시 >= 기준값)`을 생성합니다. S3에는 S3 중간컬럼 레이아웃으로 적재하고, 대상 적재는 이행 SQL과 대상 컬럼 매핑을 사용합니다. `FULL`은 `TRUNCATE TABLE` 후 `INSERT`합니다. `PK_MERGE`와 `APPEND`는 모두 컬럼매핑으로 변환된 대상 증분키 범위를 `DELETE`한 뒤 `INSERT`합니다. SQL `MERGE` 문은 생성하지 않습니다.
+
+### S3 기준본 경로와 보관
+
+S3 경로는 대상 접속의 S3 기준경로 아래에 아래처럼 생성합니다. S3는 실제 폴더가 아닌 접두어입니다.
+
+```text
+s3://기준경로/
+  full/{대상스키마}__{대상테이블}/...
+  incr/{대상스키마}__{대상테이블}/wrk_dt=YYYYMMDD/run_id={DAG실행ID}/...
+```
+
+- FULL 실행은 `full/{대상스키마}__{대상테이블}/`를 비운 뒤 새 기준본을 생성합니다. 일회성 재적재도 FULL 경로를 사용합니다.
+- INCR 실행은 실행일·실행회차별 파일을 추가하고, 해당 테이블의 증분 기준본은 최근 31일만 보관합니다.
+- `run_s3` 실행기는 DAG가 넘기는 `s3_load_path`, `s3_cleanup_prefix`, `s3_cleanup_before_write`, `s3_retention_days`를 적용합니다. 대상 이행은 경로를 추측하지 않고 `TB_MIG_S3_MANF`의 해당 실행회차 파일만 읽습니다.
 
 `WHERE` 병렬 조건은 테이블 단위 JSON 배열입니다. 조건 하나가 S3 추출 작업 하나가 되며 대상 적재는 테이블별 단일 실행입니다.
 
@@ -197,9 +243,13 @@ Redshift 대상 접속은 한 건만 등록합니다. 그 접속의 S3 기준경
 | Connection | 원천·대상 DB: `TB_MIG_CONN.CONN_ID`와 동일한 이름 |
 | Variable | `mig_metadata_conn_id` |
 | Variable | `mig_executor_module` |
-| Python 모듈 | `run_s3`, `run_ins`, `run_validate_src_s3`, `run_validate_s3_tgt` 실행 함수 |
+| Python 모듈 | `run_s3`, `run_s3_reset`, `run_s3_cleanup`, `run_ins`, `run_validate_src_s3`, `run_validate_s3_tgt` 실행 함수 |
 
-생성 DAG는 이 네 실행 함수를 호출하는 공통 껍데기입니다. `run_s3` 실행기는 `record["src_extract_sql"]`을 실행하여 원천 테이블명·원천 컬럼명 기준으로 S3에 저장하고 `s3_mnf_path`, `s3_data_path`를 반드시 반환합니다. DAG는 실제 원천 조회조건과 함께 이를 `TB_MIG_S3_MANF`에 저장하고 반환값의 `s3_manf_id`를 TaskFlow XCom으로 다음 태스크에 전달합니다. `run_ins` 호출 전 대상 테이블명·대상 컬럼명·변환식을 반영한 `DELETE·INSERT` SQL 계획을 `record["tgt_load_sql"]`에 담습니다. 실행 모듈은 원천 레이아웃 S3 데이터를 대상 스테이지에 준비한 뒤 `__MIG_STAGE__`를 실제 스테이지 테이블명으로 치환해 실행합니다. 실제 JDBC/ODBC/psycopg 추출·Parquet 생성·COPY·검증 SQL은 Airflow 실행 모듈에 구현합니다. Streamlit에서 Airflow를 직접 배포하거나 실행하지 않습니다.
+생성 DAG는 이 여섯 실행 함수를 호출하는 공통 껍데기입니다. `run_s3_reset`은 FULL 추출 전에 테이블의 FULL 접두어를 한 번만 비우고, `run_s3`은 `record["src_extract_sql"]`을 실행해 S3 중간컬럼 레이아웃의 Parquet을 만들고 `s3_mnf_path`, `s3_data_path`를 반환합니다. SRC→S3 검증 성공 후 `run_s3_cleanup`은 최근 31일을 넘긴 INCR 접두어만 정리합니다. DAG는 실제 원천 조회조건과 함께 이를 `TB_MIG_S3_MANF`에 저장하고 반환값의 `s3_manf_id`를 TaskFlow XCom으로 다음 태스크에 전달합니다. `run_ins` 호출 전 대상 테이블명·대상 컬럼명·이행 SQL을 반영한 `DELETE·INSERT` SQL 계획을 `record["tgt_load_sql"]`에 담습니다. 실행 모듈은 매니페스트의 S3 데이터를 대상 스테이지에 준비한 뒤 `__MIG_STAGE__`를 실제 스테이지 테이블명으로 치환해 실행합니다. 실제 JDBC/ODBC/psycopg 추출·Parquet 생성·COPY·검증 SQL은 Airflow 실행 모듈에 구현합니다. Streamlit에서 Airflow를 직접 배포하거나 실행하지 않습니다.
+
+### 실행 서버 설치 원칙
+
+EC2 등 실행 서버에는 본체 소스를 동일하게 배포하고, 서버별 차이는 Airflow Connection·Variable·IAM 역할과 실행기 모듈에서만 관리합니다. `mig_executor_module` 변수로 서버 전용 실행기 모듈을 지정하므로, 원천 DB 드라이버·네트워크·S3 권한·파일 처리 방식이 달라도 `app`, `dag`, `sql` 본체를 수정할 필요가 없습니다. 실제 비밀번호와 접속문자열은 서버의 Airflow Connection 또는 `.streamlit/secrets.toml`에만 두고 Git에 넣지 않습니다.
 
 증분 원천 S3 DAG는 아래처럼 시스템 기준값을 실행 설정으로 받습니다. 특정 부분을 직접 재작업할 때는 `src_where_cnd`를 넣으면 시스템 기준값 대신 그 조건을 그대로 사용합니다.
 

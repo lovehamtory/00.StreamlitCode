@@ -21,7 +21,7 @@ def table_maps(context: RuntimeContext) -> pd.DataFrame:
 
 def column_maps(context: RuntimeContext, mapping_id: int) -> pd.DataFrame:
     query = f'''SELECT col_ord, src_col_no, src_col_nm, src_data_type, src_null_yn, src_key_role_cd,
-                       tgt_col_no, tgt_col_nm, tgt_col_cmt, tgt_data_type, tgt_null_yn, tgt_key_role_cd, trnsf_expr, dflt_expr
+                       tgt_col_no, tgt_col_nm, tgt_col_cmt, tgt_data_type, tgt_null_yn, tgt_key_role_cd, tgt_expr, dflt_expr
                   FROM {qualified(context.schema_name, "tb_mig_col_mpg")}
                  WHERE mpg_id = %s AND active_yn = TRUE
                  ORDER BY col_ord'''
@@ -44,7 +44,7 @@ def source_layout(values: dict[str, Any], schema_name: str, source_connection_id
 def target_columns(frame: pd.DataFrame) -> pd.DataFrame:
     return frame.rename(columns={
         "col_ord": "매핑순서", "src_col_no": "매핑 원천순번", "src_col_nm": "매핑 원천컬럼", "src_data_type": "매핑 원천타입", "src_null_yn": "매핑 원천NULL", "src_key_role_cd": "매핑 원천키",
-        "tgt_col_no": "대상 컬럼순번", "tgt_col_nm": "대상 컬럼명", "tgt_col_cmt": "대상 컬럼설명", "tgt_data_type": "대상 데이터타입", "tgt_null_yn": "대상 NULL허용", "tgt_key_role_cd": "대상 키", "trnsf_expr": "변환식", "dflt_expr": "기본값식",
+        "tgt_col_no": "대상 컬럼순번", "tgt_col_nm": "대상 컬럼명", "tgt_col_cmt": "대상 컬럼설명", "tgt_data_type": "대상 데이터타입", "tgt_null_yn": "대상 NULL허용", "tgt_key_role_cd": "대상 키", "tgt_expr": "이행 적용SQL식", "dflt_expr": "이행 기본값식",
     })
 
 

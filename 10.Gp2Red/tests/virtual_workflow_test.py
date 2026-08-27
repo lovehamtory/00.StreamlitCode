@@ -29,6 +29,8 @@ from common.mig_step_runtime import execute_logged_step
 class VirtualWorkflowTest(unittest.TestCase):
     def test_metadata_contract(self) -> None:
         ddl = (PROJECT_ROOT / "sql" / "01_mig_metadata_ddl.sql").read_text(encoding="utf-8").upper()
+        table_block = ddl.split("CREATE TABLE MIG_META.TB_MIG_TBL_MPG", 1)[1].split("CREATE TABLE MIG_META.TB_MIG_COL_MPG", 1)[0]
+        column_block = ddl.split("CREATE TABLE MIG_META.TB_MIG_COL_MPG", 1)[1].split("CREATE TABLE MIG_META.TB_MIG_MPG_CHG_HIST", 1)[0]
         for name in ("TB_MIG_CONN", "TB_MIG_SBJ_AREA", "TB_MIG_SBJ_DAG_MPG", "TB_MIG_SRC_LAYOUT", "TB_MIG_TBL_MPG", "TB_MIG_COL_MPG", "TB_MIG_MPG_CHG_HIST", "TB_MIG_S3_MANF", "TB_MIG_DAG_RUN", "TB_MIG_RUN_LOG", "TB_MIG_VALD_RSLT", "TB_MIG_VALD_COL_RSLT", "TB_MIG_TBL_LOAD_HIST", "TB_MIG_ARTF_ITEM"):
             self.assertIn(name, ddl)
         self.assertNotIn("CREATE TABLE MIG_META.TB_MIG_SBJ_DEP", ddl)
@@ -40,7 +42,18 @@ class VirtualWorkflowTest(unittest.TestCase):
         self.assertNotIn("TGT_SORT_STYLE", ddl)
         self.assertIn("SYS_COL_NM_ARR", ddl)
         self.assertIn("SRC_INCR_COL_NM_ARR", ddl)
+        self.assertIn("COL_MPG_MTHD_CD", ddl)
+        self.assertIn("SRC_REF_COL_NM_ARR", ddl)
+        self.assertIn("S3_COL_NM", ddl)
+        self.assertIn("SRC_EXPR", ddl)
+        self.assertIn("TGT_EXPR", ddl)
+        self.assertNotIn("TRNSF_EXPR", ddl)
+        self.assertIn("SRC_EXT_SQL", ddl)
+        self.assertIn("TGT_LOAD_SQL", ddl)
         self.assertNotIn("BASIS_STT_VAL", ddl)
+        self.assertLess(table_block.index("TGT_CONN_ID"), table_block.index("SRC_CONN_ID"))
+        self.assertLess(column_block.index("TGT_COL_NM"), column_block.index("SRC_COL_NM"))
+        self.assertLess(column_block.index("COL_MPG_MTHD_CD"), column_block.index("SRC_COL_NM"))
 
     def test_redshift_ddl_static_parse(self) -> None:
         source = (PROJECT_ROOT / "sql" / "01_mig_metadata_ddl.sql").read_text(encoding="utf-8")
@@ -59,10 +72,39 @@ class VirtualWorkflowTest(unittest.TestCase):
         row = mapping.defaults({"PRJ_CD": "PRJ1", "SBJ_AREA_CD": "A010001", "SRC_SCH_NM": "SRC", "SRC_TBL_NM": "고객", "TGT_SCH_NM": "DWH", "TGT_TBL_NM": "DIM_CUSTOMER"})
         self.assertEqual(row["LOAD_STS_CD"], "FULL")
         self.assertEqual(row["PARL_MTHD_CD"], "NONE")
+        self.assertLess(mapping.TABLE_FIELDS.index("TGT_TBL_NM"), mapping.TABLE_FIELDS.index("SRC_TBL_NM"))
+        self.assertLess(mapping.COLUMN_DETAIL_FIELDS.index("TGT_COL_NM"), mapping.COLUMN_DETAIL_FIELDS.index("SRC_COL_NM"))
         self.assertEqual(data_type.redshift_type("bpchar", "12", 3), "VARCHAR(36)")
         self.assertEqual(data_type.redshift_type("numeric(18,2)"), "DECIMAL(18,2)")
         self.assertEqual(data_type.redshift_type("boolean"), "BOOLEAN")
         self.assertEqual(data_type.redshift_type("date"), "TIMESTAMP")
+        base = {field: None for field in mapping.COLUMN_FIELDS}
+        base.update({"MPG_ID": 1, "COL_ORD": 1, "TGT_COL_NM": "LOAD_DVSN", "TGT_DATA_TYPE": "VARCHAR(1)", "COL_MPG_MTHD_CD": "CONST", "TGT_EXPR": "'I'"})
+        constant = mapping.normalized_columns(pd.DataFrame([base]))[0]
+        self.assertEqual(constant["COL_MPG_MTHD_CD"], "CONST")
+        self.assertIsNone(constant["SRC_REF_COL_NM_ARR"])
+        null_row = dict(base) | {"COL_ORD": 2, "TGT_COL_NM": "OPTIONAL_VAL", "COL_MPG_MTHD_CD": "NULL", "TGT_EXPR": None}
+        self.assertEqual(mapping.normalized_columns(pd.DataFrame([null_row]))[0]["COL_MPG_MTHD_CD"], "NULL")
+        move_row = dict(base) | {"COL_ORD": 3, "TGT_COL_NM": "CUSTOMER_ID", "COL_MPG_MTHD_CD": "MOVE", "TGT_EXPR": None}
+        with self.assertRaisesRegex(ValueError, "원천컬럼명"):
+            mapping.normalized_columns(pd.DataFrame([move_row]))
+        table = pd.Series({"src_sch_nm": "SRC", "src_tbl_nm": "CUSTOMER", "tgt_sch_nm": "DWH", "tgt_tbl_nm": "DIM_CUSTOMER", "load_sts_cd": "INCR", "src_incr_col_nm_arr": '["CUST_NO"]'})
+        sql_rows = pd.DataFrame([
+            {"COL_ORD": 1, "TGT_COL_NM": "CUSTOMER_ID", "TGT_DATA_TYPE": "VARCHAR(30)", "COL_MPG_MTHD_CD": "MOVE", "TGT_EXPR": None, "DFLT_EXPR": None, "S3_COL_NM": "CUST_NO", "SRC_EXPR": None, "SRC_REF_COL_NM_ARR": '["CUST_NO"]', "SRC_COL_NM": "CUST_NO"},
+            {"COL_ORD": 2, "TGT_COL_NM": "LOAD_DVSN", "TGT_DATA_TYPE": "VARCHAR(1)", "COL_MPG_MTHD_CD": "CONST", "TGT_EXPR": "'I'", "DFLT_EXPR": None, "S3_COL_NM": None, "SRC_EXPR": None, "SRC_REF_COL_NM_ARR": None, "SRC_COL_NM": None},
+            {"COL_ORD": 3, "TGT_COL_NM": "OPTIONAL_VAL", "TGT_DATA_TYPE": "VARCHAR(10)", "COL_MPG_MTHD_CD": "NULL", "TGT_EXPR": None, "DFLT_EXPR": None, "S3_COL_NM": None, "SRC_EXPR": None, "SRC_REF_COL_NM_ARR": None, "SRC_COL_NM": None},
+            {"COL_ORD": 4, "TGT_COL_NM": "CUSTOMER_LABEL", "TGT_DATA_TYPE": "VARCHAR(100)", "COL_MPG_MTHD_CD": "EXPR", "TGT_EXPR": None, "DFLT_EXPR": None, "S3_COL_NM": "CUSTOMER_LABEL", "SRC_EXPR": "CONCAT(S.\"CUST_NO\", '_', S.\"CUST_NM\")", "SRC_REF_COL_NM_ARR": '["CUST_NO", "CUST_NM"]', "SRC_COL_NM": None},
+        ])
+        source_sql, target_sql = mapping.sql_templates(table, sql_rows)
+        self.assertIn('S."CUST_NO" AS "CUST_NO"', source_sql)
+        self.assertIn('CONCAT(S."CUST_NO", \'_\', S."CUST_NM") AS "CUSTOMER_LABEL"', source_sql)
+        self.assertIn("__SRC_WHERE_CND__", source_sql)
+        self.assertIn('S."CUST_NO" AS "CUSTOMER_ID"', target_sql)
+        self.assertIn("CAST(NULL AS VARCHAR(10))", target_sql)
+        self.assertIn("__MIG_STAGE__", target_sql)
+        mapping.validate_sql_pair(source_sql, target_sql, sql_rows)
+        with self.assertRaisesRegex(ValueError, "컬럼수"):
+            mapping.validate_sql_pair('SELECT S."CUST_NO" FROM "SRC"."CUSTOMER" AS S WHERE __SRC_WHERE_CND__', target_sql, sql_rows)
 
     def test_subject_and_table_dag_generation(self) -> None:
         settings = {"s3_default": 2, "s3_maximum": 4, "ins_default": 1, "ins_maximum": 1, "incr_schedule": "DLY_0200"}
@@ -98,10 +140,15 @@ class VirtualWorkflowTest(unittest.TestCase):
         self.assertIn('quote_identifier(record["src_tbl_nm"])', source)
         self.assertIn('quote_identifier(record["tgt_sch_nm"])', source)
         self.assertIn('quote_identifier(record["tgt_tbl_nm"])', source)
-        self.assertIn('row["src_col_nm"]', source)
+        self.assertIn('row.get("src_ref_col_nm_arr")', source)
         self.assertIn('row["tgt_col_nm"]', source)
         self.assertIn('record["src_extract_sql"]', source)
         self.assertIn('record["tgt_load_sql"]', source)
+        self.assertIn('src_ext_sql', source)
+        self.assertIn('tgt_load_sql', source)
+        self.assertIn('src_ref_col_nm_arr', source)
+        self.assertIn('__SRC_WHERE_CND__', source)
+        self.assertIn('__MIG_STAGE__', source)
         self.assertIn('src_where_cnd', source)
         self.assertIn('s3_manf_id', source)
         self.assertIn('TRUNCATE TABLE', source)
@@ -144,10 +191,13 @@ class VirtualWorkflowTest(unittest.TestCase):
         with patch.dict(sys.modules, modules):
             exec(compile(source, "virtual_generated_dag.py", "exec"), namespace)
         column_rows = [
-            {"src_col_nm": "CUST_NO", "tgt_col_nm": "CUSTOMER_ID", "trnsf_expr": None, "dflt_expr": None},
-            {"src_col_nm": "RSN_CD", "tgt_col_nm": "REASON_CODE", "trnsf_expr": None, "dflt_expr": None},
-            {"src_col_nm": "CRE_DTM", "tgt_col_nm": "CREATED_AT", "trnsf_expr": None, "dflt_expr": None},
-            {"src_col_nm": "UPD_DTM", "tgt_col_nm": "UPDATED_AT", "trnsf_expr": None, "dflt_expr": None},
+            {"src_col_nm": "CUST_NO", "tgt_col_nm": "CUSTOMER_ID", "tgt_data_type": "VARCHAR(30)", "s3_col_nm": "CUST_NO", "col_mpg_mthd_cd": "MOVE", "src_expr": None, "tgt_expr": None, "dflt_expr": None, "src_ref_col_nm_arr": '["CUST_NO"]'},
+            {"src_col_nm": "RSN_CD", "tgt_col_nm": "REASON_CODE", "tgt_data_type": "VARCHAR(10)", "s3_col_nm": "RSN_CD", "col_mpg_mthd_cd": "MOVE", "src_expr": None, "tgt_expr": None, "dflt_expr": None, "src_ref_col_nm_arr": '["RSN_CD"]'},
+            {"src_col_nm": "CRE_DTM", "tgt_col_nm": "CREATED_AT", "tgt_data_type": "TIMESTAMP", "s3_col_nm": "CRE_DTM", "col_mpg_mthd_cd": "MOVE", "src_expr": None, "tgt_expr": None, "dflt_expr": None, "src_ref_col_nm_arr": '["CRE_DTM"]'},
+            {"src_col_nm": "UPD_DTM", "tgt_col_nm": "UPDATED_AT", "tgt_data_type": "TIMESTAMP", "s3_col_nm": "UPD_DTM", "col_mpg_mthd_cd": "MOVE", "src_expr": None, "tgt_expr": None, "dflt_expr": None, "src_ref_col_nm_arr": '["UPD_DTM"]'},
+            {"src_col_nm": None, "tgt_col_nm": "LOAD_DVSN", "tgt_data_type": "VARCHAR(1)", "s3_col_nm": None, "col_mpg_mthd_cd": "CONST", "src_expr": None, "tgt_expr": "'I'", "dflt_expr": None, "src_ref_col_nm_arr": None},
+            {"src_col_nm": None, "tgt_col_nm": "OPTIONAL_VAL", "tgt_data_type": "VARCHAR(10)", "s3_col_nm": None, "col_mpg_mthd_cd": "NULL", "src_expr": None, "tgt_expr": None, "dflt_expr": None, "src_ref_col_nm_arr": None},
+            {"src_col_nm": None, "tgt_col_nm": "CUSTOMER_REASON", "tgt_data_type": "VARCHAR(50)", "s3_col_nm": "CUSTOMER_REASON", "col_mpg_mthd_cd": "EXPR", "src_expr": "CONCAT(S.\"CUST_NO\", '_', S.\"RSN_CD\")", "tgt_expr": None, "dflt_expr": None, "src_ref_col_nm_arr": '["CUST_NO", "RSN_CD"]'},
         ]
         namespace["column_mappings"] = lambda record: column_rows
         record = {
@@ -160,17 +210,37 @@ class VirtualWorkflowTest(unittest.TestCase):
             "sys_col_nm_arr": '["CRE_DTM", "UPD_DTM"]',
             "sys_col_fmt_cd": "YYYYMMDDHH24MISS",
             "src_incr_col_nm_arr": '["CUST_NO", "RSN_CD"]',
+            "s3_stg_path": "s3://migration-stage",
+            "s3_rlt_path": "dwh__dim_customer",
+            "dag_run_id": "manual__2026-08-27T00:00:00+00:00",
         }
         source_plan = namespace["source_extract_plan"](dict(record), {"sys_ref_val": "20260101000000"})
         source_plan = namespace["source_sql"](namespace["parallel_records"]([source_plan])[0])
         target_plan = namespace["target_load_plan"](dict(record))
         self.assertIn('FROM "GP_STAGE"."고객원장" AS S', source_plan["src_extract_sql"])
         self.assertIn('(S."CUST_NO", S."RSN_CD") IN (SELECT (I."CUST_NO", I."RSN_CD")', source_plan["src_extract_sql"])
+        self.assertIn("CONCAT(S.\"CUST_NO\", '_', S.\"RSN_CD\") AS \"CUSTOMER_REASON\"", source_plan["src_extract_sql"])
         self.assertNotIn('DIM_CUSTOMER', source_plan["src_extract_sql"])
+        self.assertEqual(source_plan["s3_load_path"], "s3://migration-stage/incr/dwh__dim_customer/wrk_dt=20260827/run_id=manual__2026-08-27T00_00_00_00_00")
+        self.assertEqual(source_plan["s3_retention_days"], 31)
+        full_s3_plan = namespace["source_extract_plan"](dict(record) | {"load_sts_cd": "FULL"}, {"wrk_dt": "20260827"})
+        self.assertEqual(full_s3_plan["s3_load_path"], "s3://migration-stage/full/dwh__dim_customer")
+        self.assertTrue(full_s3_plan["s3_cleanup_before_write"])
         self.assertIn('DELETE FROM "DWH"."DIM_CUSTOMER" AS T', target_plan["tgt_load_sql"])
         self.assertIn('S."CUST_NO" AS "CUSTOMER_ID", S."RSN_CD" AS "REASON_CODE"', target_plan["tgt_load_sql"])
-        self.assertIn('INSERT INTO "DWH"."DIM_CUSTOMER" ("CUSTOMER_ID", "REASON_CODE", "CREATED_AT", "UPDATED_AT")', target_plan["tgt_load_sql"])
+        self.assertIn('INSERT INTO "DWH"."DIM_CUSTOMER" ("CUSTOMER_ID", "REASON_CODE", "CREATED_AT", "UPDATED_AT", "LOAD_DVSN", "OPTIONAL_VAL", "CUSTOMER_REASON")', target_plan["tgt_load_sql"])
+        self.assertIn("CAST(NULL AS VARCHAR(10))", target_plan["tgt_load_sql"])
+        self.assertIn('S."CUSTOMER_REASON"', target_plan["tgt_load_sql"])
+        self.assertNotIn("CONCAT(S.\"CUST_NO\", '_', S.\"RSN_CD\")", target_plan["tgt_load_sql"])
         self.assertNotIn('"고객원장"', target_plan["tgt_load_sql"])
+        source_custom = dict(record) | {"src_ext_sql": 'SELECT S."CUST_NO", L."CUST_GRP" FROM "GP_STAGE"."고객원장" AS S LEFT JOIN "GP_STAGE"."고객분류" AS L ON L."CUST_NO" = S."CUST_NO" WHERE __SRC_WHERE_CND__'}
+        source_custom_plan = namespace["source_sql"](namespace["parallel_records"]([namespace["source_extract_plan"](source_custom, {"sys_ref_val": "20260101000000"})])[0])
+        self.assertIn('LEFT JOIN "GP_STAGE"."고객분류"', source_custom_plan["src_extract_sql"])
+        self.assertNotIn("__SRC_WHERE_CND__", source_custom_plan["src_extract_sql"])
+        target_custom = dict(record) | {"tgt_load_sql": 'DELETE FROM __TGT_TABLE__ AS T USING __MIG_STAGE__ AS S WHERE T."CUSTOMER_ID" = S."CUST_NO"; INSERT INTO __TGT_TABLE__ SELECT * FROM __MIG_STAGE__'}
+        target_custom_plan = namespace["target_load_plan"](target_custom)
+        self.assertIn('DELETE FROM "DWH"."DIM_CUSTOMER"', target_custom_plan["tgt_load_sql"])
+        self.assertIn("__MIG_STAGE__", target_custom_plan["tgt_load_sql"])
 
     def test_parallel_and_state_contract(self) -> None:
         result = load_state.normalize_parallel("WHERE", '["abc_dt BETWEEN \'19000101\' AND \'20001231\'"]')
@@ -223,6 +293,10 @@ class VirtualWorkflowTest(unittest.TestCase):
         self.assertIn('title="초기 설정"', orchestration)
         self.assertIn('title="실행 현황"', orchestration)
         self.assertTrue((PROJECT_ROOT / "app" / "SrcTgtInitialize.py").exists())
+        mapping_source = (PROJECT_ROOT / "app" / "SrcTgtMapping.py").read_text(encoding="utf-8")
+        self.assertIn('"이관·이행 SQL", "SQL 이력"', mapping_source)
+        self.assertIn("restore_sql_history", mapping_source)
+        self.assertIn("before_value", mapping_source)
 
 
 if __name__ == "__main__":
