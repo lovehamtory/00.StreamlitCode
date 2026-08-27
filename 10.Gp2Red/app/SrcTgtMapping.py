@@ -2,9 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from datetime import datetime
 from typing import Any, Callable
-from uuid import uuid4
 
 import pandas as pd
 import streamlit as st
@@ -12,7 +10,6 @@ import streamlit as st
 from SrcTgtArtifact import excel_bytes
 from SrcTgtConnection import connection_frame, connection_label, runtime_connection_values, selectable_connections, validate_mapping_connections
 from SrcTgtDataType import redshift_type
-from SrcTgtDagGenerator import once_controller_source, save_dag_files
 from SrcTgtLoadState import INCR_BASIS_CODES, normalize_parallel, transition_plan
 
 
@@ -163,7 +160,7 @@ def natural_key(row: dict[str, object]) -> tuple[str, ...]:
     return tuple(text(row[field]) for field in NATURAL_FIELDS)
 
 
-def validate_tables(frame: pd.DataFrame, can_edit: Callable[[str, str], bool]) -> list[dict[str, object]]:
+def validate_tables(frame: pd.DataFrame) -> list[dict[str, object]]:
     result: list[dict[str, object]] = []
     keys: set[tuple[str, ...]] = set()
     for number, source in enumerate(frame.to_dict(orient="records"), start=2):
@@ -172,8 +169,6 @@ def validate_tables(frame: pd.DataFrame, can_edit: Callable[[str, str], bool]) -
         key = natural_key(row)
         if key in keys:
             raise ValueError(f"테이블매핑 {number}행의 원천·대상 식별값이 중복됩니다.")
-        if not can_edit(text(row["PRJ_CD"]), text(row["SBJ_AREA_CD"])):
-            raise ValueError(f"테이블매핑 {number}행의 수정 권한이 없습니다.")
         keys.add(key)
         result.append(row)
     if not result:
@@ -217,6 +212,17 @@ def upsert_table(cursor: Any, schema_name: str, qualified: Callable[[str, str], 
     return current_id
 
 
+def record_mapping_change(cursor: Any, schema_name: str, qualified: Callable[[str, str], str], mapping_id_value: int, division: str, reason: str, after_value: dict[str, object]) -> None:
+    cursor.execute(f"SELECT meta_ver_no FROM {qualified(schema_name, 'tb_mig_tbl_mpg')} WHERE mpg_id = %s", (mapping_id_value,))
+    version_row = cursor.fetchone()
+    if version_row is None:
+        raise ValueError(f"테이블매핑을 찾을 수 없습니다: {mapping_id_value}")
+    cursor.execute(
+        f"INSERT INTO {qualified(schema_name, 'tb_mig_mpg_chg_hist')} (mpg_id, meta_ver_no, chg_dvsn_cd, chg_rsn, bf_val, af_val) VALUES (%s, %s, %s, %s, %s, %s)",
+        (mapping_id_value, int(version_row[0]), division, reason, None, json.dumps(after_value, ensure_ascii=False, default=str, sort_keys=True)),
+    )
+
+
 def resolve_column_mapping_id(cursor: Any, schema_name: str, qualified: Callable[[str, str], str], row: dict[str, object], uploaded_ids: dict[tuple[str, ...], int]) -> int:
     supplied = integer(row.get("MPG_ID"), "MPG_ID")
     if supplied:
@@ -240,18 +246,20 @@ def mapping_scope(cursor: Any, schema_name: str, qualified: Callable[[str, str],
     return text(found[0][0]), text(found[0][1])
 
 
-def save_bundle(connect: Callable[[dict[str, Any]], Any], values: dict[str, Any], schema_name: str, qualified: Callable[[str, str], str], tables: list[dict[str, object]], columns: list[dict[str, object]], replace_columns: bool, can_edit: Callable[[str, str], bool]) -> tuple[int, int]:
+def save_bundle(connect: Callable[[dict[str, Any]], Any], values: dict[str, Any], schema_name: str, qualified: Callable[[str, str], str], tables: list[dict[str, object]], columns: list[dict[str, object]], replace_columns: bool) -> tuple[int, int]:
     table_name = qualified(schema_name, "tb_mig_col_mpg")
     with connect(values) as connection:
         with connection.cursor() as cursor:
             subject_table = qualified(schema_name, "tb_mig_sbj_area")
             for subject_area in sorted({text(row["SBJ_AREA_CD"]) for row in tables}):
-                cursor.execute(f"SELECT 1 FROM {subject_table} WHERE sbj_area_cd = %s AND up_sbj_area_cd IS NOT NULL AND active_yn = TRUE", (subject_area,))
+                cursor.execute(f"SELECT 1 FROM {subject_table} WHERE sbj_area_cd = %s AND active_yn = TRUE", (subject_area,))
                 if cursor.fetchone() is None:
-                    raise ValueError(f"사용 중인 실행 주제영역을 찾을 수 없습니다: {subject_area}")
+                    raise ValueError(f"사용 중인 주제영역을 찾을 수 없습니다: {subject_area}")
             for row in tables:
                 validate_mapping_connections(cursor, schema_name, qualified, row["SRC_CONN_ID"], row["TGT_CONN_ID"])
             uploaded_ids = {natural_key(row): upsert_table(cursor, schema_name, qualified, row) for row in tables}
+            for row in tables:
+                record_mapping_change(cursor, schema_name, qualified, uploaded_ids[natural_key(row)], "TBL_MPG", "테이블매핑 저장", row)
             uploaded_scopes = {uploaded_ids[natural_key(row)]: (text(row["PRJ_CD"]), text(row["SBJ_AREA_CD"])) for row in tables}
             mapped_columns: list[tuple[int, dict[str, object]]] = []
             seen_orders: set[tuple[int, int]] = set()
@@ -260,9 +268,6 @@ def save_bundle(connect: Callable[[dict[str, Any]], Any], values: dict[str, Any]
                 scope = uploaded_scopes.get(map_id)
                 if scope is None:
                     scope = mapping_scope(cursor, schema_name, qualified, map_id)
-                project, subject_area = scope
-                if not can_edit(project, subject_area):
-                    raise ValueError(f"컬럼매핑의 수정 권한이 없습니다: {project} / {subject_area}")
                 key = (map_id, int(row["COL_ORD"]))
                 if key in seen_orders:
                     raise ValueError(f"동일 테이블매핑의 매핑순서가 중복됩니다: {map_id} / {row['COL_ORD']}")
@@ -278,6 +283,7 @@ def save_bundle(connect: Callable[[dict[str, Any]], Any], values: dict[str, Any]
                     f'''INSERT INTO {table_name} (mpg_id, col_ord, src_col_no, src_col_nm, src_data_type, src_null_yn, src_key_role_cd, tgt_col_no, tgt_col_nm, tgt_data_type, tgt_null_yn, tgt_key_role_cd, trnsf_expr, dflt_expr, sum_vald_yn, hsh_vald_yn, active_yn) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, TRUE)''',
                     (map_id, row["COL_ORD"], row["SRC_COL_NO"], row["SRC_COL_NM"], row["SRC_DATA_TYPE"], row["SRC_NULL_YN"], row["SRC_KEY_ROLE_CD"], row["TGT_COL_NO"], row["TGT_COL_NM"], row["TGT_DATA_TYPE"], row["TGT_NULL_YN"], row["TGT_KEY_ROLE_CD"], row["TRNSF_EXPR"], row["DFLT_EXPR"], row["SUM_VALD_YN"], row["HSH_VALD_YN"]),
                 )
+                record_mapping_change(cursor, schema_name, qualified, map_id, "COL_MPG", "컬럼매핑 저장", row)
         connection.commit()
     return len(tables), len(columns)
 
@@ -307,28 +313,20 @@ def form_value(row: pd.Series | None, field: str, default: str = "") -> str:
     return text(row[field.lower()]) if row is not None and field.lower() in row.index else default
 
 
-def source_layout_table(values: dict[str, Any]) -> tuple[str, str]:
-    settings = dict(st.secrets.get("layout_history", {}))
-    return text(settings.get("schema")) or text(values.get("default_schema")) or "public", text(settings.get("table")) or "TB_TABLE_LAYOUT_GP"
-
-
-def source_snapshots(query_frame: Callable[..., pd.DataFrame], values: dict[str, Any], qualified: Callable[[str, str], str]) -> pd.DataFrame:
-    schema_name, table_name = source_layout_table(values)
-    query = f'''SELECT COALESCE(src_conn_id, 'SRC_GP') AS "SRC_CONN_ID", std_dt AS "STD_DT", owner AS "OWNER", tbl AS "TBL", MAX(entity) AS "ENTITY"
-                  FROM {qualified(schema_name, table_name)}
-                 GROUP BY COALESCE(src_conn_id, 'SRC_GP'), std_dt, owner, tbl
-                 ORDER BY std_dt DESC, src_conn_id, owner, tbl'''
+def source_snapshots(query_frame: Callable[..., pd.DataFrame], values: dict[str, Any], schema_name: str, qualified: Callable[[str, str], str]) -> pd.DataFrame:
+    query = f'''SELECT src_conn_id AS "SRC_CONN_ID", std_dt AS "STD_DT", src_sch_nm AS "OWNER", src_tbl_nm AS "TBL", MAX(src_tbl_cmt) AS "ENTITY"
+                  FROM {qualified(schema_name, "tb_mig_src_layout")}
+                 GROUP BY src_conn_id, std_dt, src_sch_nm, src_tbl_nm
+                 ORDER BY std_dt DESC, src_conn_id, src_sch_nm, src_tbl_nm'''
     return query_frame(values, query)
 
 
-def source_columns(query_frame: Callable[..., pd.DataFrame], values: dict[str, Any], qualified: Callable[[str, str], str], source_connection_id: str, standard_date: str, owner: str, table: str, character_multiple: object = 3) -> pd.DataFrame:
-    schema_name, table_name = source_layout_table(values)
-    query = f'''SELECT colno AS "COL_ORD", colno AS "SRC_COL_NO", col AS "SRC_COL_NM", datatype AS "SRC_DATA_TYPE", len AS "SRC_DATA_LEN",
-                      CASE WHEN UPPER(COALESCE(nullable, 'YES')) IN ('NO', 'N', 'FALSE') THEN FALSE ELSE TRUE END AS "SRC_NULL_YN",
-                      CASE WHEN UPPER(COALESCE(ispk, '')) IN ('Y', 'YES', 'TRUE') THEN 'PK' ELSE NULL END AS "SRC_KEY_ROLE_CD"
-                  FROM {qualified(schema_name, table_name)}
-                 WHERE COALESCE(src_conn_id, 'SRC_GP') = %s AND std_dt = %s AND owner = %s AND tbl = %s
-                 ORDER BY colno'''
+def source_columns(query_frame: Callable[..., pd.DataFrame], values: dict[str, Any], schema_name: str, qualified: Callable[[str, str], str], source_connection_id: str, standard_date: str, owner: str, table: str, character_multiple: object = 3) -> pd.DataFrame:
+    query = f'''SELECT src_col_no AS "COL_ORD", src_col_no AS "SRC_COL_NO", src_col_nm AS "SRC_COL_NM", src_data_type AS "SRC_DATA_TYPE", src_data_len AS "SRC_DATA_LEN",
+                      src_null_yn AS "SRC_NULL_YN", CASE WHEN src_pk_yn THEN 'PK' ELSE NULL END AS "SRC_KEY_ROLE_CD"
+                  FROM {qualified(schema_name, "tb_mig_src_layout")}
+                 WHERE src_conn_id = %s AND std_dt = %s AND src_sch_nm = %s AND src_tbl_nm = %s
+                 ORDER BY src_col_no'''
     source = query_frame(values, query, (source_connection_id, standard_date, owner, table))
     if source.empty:
         raise ValueError("선택한 원천 레이아웃의 컬럼을 찾을 수 없습니다.")
@@ -388,7 +386,7 @@ def automatic_columns(source: pd.DataFrame, target: pd.DataFrame) -> tuple[pd.Da
     return result, matched
 
 
-def render_single(maps: pd.DataFrame, values: dict[str, Any], schema_name: str, can_edit: Callable[[str, str], bool], query_frame: Callable[..., pd.DataFrame], connect: Callable[[dict[str, Any]], Any], qualified: Callable[[str, str], str]) -> None:
+def render_single(maps: pd.DataFrame, values: dict[str, Any], schema_name: str, query_frame: Callable[..., pd.DataFrame], connect: Callable[[dict[str, Any]], Any], qualified: Callable[[str, str], str]) -> None:
     options = ["신규", *[int(value) for value in maps.mpg_id.tolist()]]
     selected = st.selectbox("테이블매핑", options, format_func=lambda value: "신규 테이블매핑" if value == "신규" else f"{value} · {maps.loc[maps.mpg_id.eq(value)].iloc[0].src_sch_nm}.{maps.loc[maps.mpg_id.eq(value)].iloc[0].src_tbl_nm} → {maps.loc[maps.mpg_id.eq(value)].iloc[0].tgt_sch_nm}.{maps.loc[maps.mpg_id.eq(value)].iloc[0].tgt_tbl_nm}")
     current = None if selected == "신규" else maps.loc[maps.mpg_id.eq(selected)].iloc[0]
@@ -405,7 +403,7 @@ def render_single(maps: pd.DataFrame, values: dict[str, Any], schema_name: str, 
     automatic_key = f"mapping_auto_columns_{selected}"
     if current is None:
         try:
-            snapshots = source_snapshots(query_frame, values, qualified)
+            snapshots = source_snapshots(query_frame, values, schema_name, qualified)
             snapshots = snapshots.loc[snapshots.SRC_CONN_ID.map(text).str.upper().isin(source_connections.conn_id.map(text).str.upper())].copy()
             if snapshots.empty:
                 raise ValueError("사용 중인 원천 접속정보의 레이아웃 적재 이력이 없습니다. 먼저 원천 레이아웃에서 기준일을 적재하십시오.")
@@ -414,7 +412,7 @@ def render_single(maps: pd.DataFrame, values: dict[str, Any], schema_name: str, 
             source_snapshot = snapshots.iloc[snapshot_options.index(selected_snapshot)]
             source_connection = source_connections.loc[source_connections.conn_id.map(text).str.upper().eq(text(source_snapshot.SRC_CONN_ID).upper())].iloc[0]
             character_multiple = int(source_connection.get("char_len_mul", 3) or 3)
-            existing = source_columns(query_frame, values, qualified, text(source_snapshot.SRC_CONN_ID), text(source_snapshot.STD_DT), text(source_snapshot.OWNER), text(source_snapshot.TBL), character_multiple)
+            existing = source_columns(query_frame, values, schema_name, qualified, text(source_snapshot.SRC_CONN_ID), text(source_snapshot.STD_DT), text(source_snapshot.OWNER), text(source_snapshot.TBL), character_multiple)
             st.caption(f"원천 구조 · {text(source_snapshot.ENTITY) or '-'} · {len(existing):,} 컬럼 · 문자길이배수 {character_multiple}배")
         except Exception as error:
             st.error(f"원천 레이아웃 조회 실패: {error}", icon=":material/error:")
@@ -468,21 +466,19 @@ def render_single(maps: pd.DataFrame, values: dict[str, Any], schema_name: str, 
             source.update({"MPG_ID": None if current is None else int(selected), "PRJ_CD": prj_cd, "SBJ_AREA_CD": sbj_area_cd, "SRC_CONN_ID": src_conn_id, "SRC_SCH_NM": src_sch_nm, "SRC_TBL_NM": src_tbl_nm, "TGT_CONN_ID": tgt_conn_id, "TGT_SCH_NM": tgt_sch_nm, "TGT_TBL_NM": tgt_tbl_nm, "LOAD_STS_CD": "FULL" if current is None else form_value(current, "LOAD_STS_CD", "FULL"), "INCR_BASIS_CD": incr_basis_cd, "INCR_BASIS_COL_NM": incr_basis_col_nm, "PARL_MTHD_CD": parl_mthd_cd, "PARL_CND_ARR": parl_cnd_arr})
             table = defaults(source)
             table["MPG_ID"] = None if current is None else int(selected)
-            if not can_edit(text(table["PRJ_CD"]), text(table["SBJ_AREA_CD"])):
-                raise ValueError("해당 프로젝트·주제영역의 수정 권한이 없습니다.")
             column_input = edited.copy()
             for field in NATURAL_FIELDS:
                 column_input[field] = table[field]
             column_input["MPG_ID"] = table["MPG_ID"]
             columns = normalized_columns(column_input)
-            save_bundle(connect, values, schema_name, qualified, [table], columns, True, can_edit)
+            save_bundle(connect, values, schema_name, qualified, [table], columns, True)
             st.session_state.pop(automatic_key, None)
             st.rerun()
         except Exception as error:
             st.error(f"매핑 저장 실패: {error}", icon=":material/error:")
 
 
-def render_upload(values: dict[str, Any], schema_name: str, can_edit: Callable[[str, str], bool], connect: Callable[[dict[str, Any]], Any], qualified: Callable[[str, str], str]) -> None:
+def render_upload(values: dict[str, Any], schema_name: str, connect: Callable[[dict[str, Any]], Any], qualified: Callable[[str, str], str]) -> None:
     st.download_button("업로드 양식 다운로드", data=excel_bytes([("테이블매핑", template_frame(TABLE_FIELDS)), ("컬럼매핑", template_frame(COLUMN_FIELDS))]), file_name="이관매핑_업로드양식.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", icon=":material/download:")
     uploaded = st.file_uploader("이관 매핑 파일", type=["xlsx"], key="mapping_upload_file")
     replace_columns = st.toggle("업로드 테이블의 기존 컬럼매핑 교체", value=True)
@@ -497,15 +493,15 @@ def render_upload(values: dict[str, Any], schema_name: str, can_edit: Callable[[
         return
     if st.button("일괄 반영", icon=":material/upload:", type="primary"):
         try:
-            tables = validate_tables(table_frame, can_edit)
+            tables = validate_tables(table_frame)
             columns = normalized_columns(column_frame)
-            saved_tables, saved_columns = save_bundle(connect, values, schema_name, qualified, tables, columns, replace_columns, can_edit)
+            saved_tables, saved_columns = save_bundle(connect, values, schema_name, qualified, tables, columns, replace_columns)
             st.success(f"테이블매핑 {saved_tables:,}건, 컬럼매핑 {saved_columns:,}건을 반영했습니다.", icon=":material/check_circle:")
         except Exception as error:
             st.error(f"일괄 반영 실패: {error}", icon=":material/error:")
 
 
-def render_load_transition(maps: pd.DataFrame, values: dict[str, Any], schema_name: str, can_edit: Callable[[str, str], bool], connect: Callable[[dict[str, Any]], Any], qualified: Callable[[str, str], str]) -> None:
+def render_load_transition(maps: pd.DataFrame, values: dict[str, Any], schema_name: str, connect: Callable[[dict[str, Any]], Any], qualified: Callable[[str, str], str]) -> None:
     if maps.empty:
         st.info("전환할 테이블매핑이 없습니다.", icon=":material/info:")
         return
@@ -532,19 +528,17 @@ def render_load_transition(maps: pd.DataFrame, values: dict[str, Any], schema_na
                 with connection.cursor() as cursor:
                     for mapping_id_value in selected:
                         row = selected_rows.loc[selected_rows.mpg_id.eq(mapping_id_value)].iloc[0]
-                        if not can_edit(text(row.prj_cd), text(row.sbj_area_cd)):
-                            raise ValueError(f"테이블매핑 {mapping_id_value}의 수정 권한이 없습니다.")
                         cursor.execute(f"SELECT load_sts_cd, incr_basis_cd, incr_basis_col_nm FROM {table_name} WHERE mpg_id = %s AND active_yn = TRUE", (mapping_id_value,))
                         current = cursor.fetchone()
                         if current is None:
                             raise ValueError(f"활성 테이블매핑을 찾을 수 없습니다: {mapping_id_value}")
-                        cursor.execute(f"SELECT manf_id FROM {manifest_name} WHERE mpg_id = %s AND src_s3_vald_sts_cd = 'SUCCESS' ORDER BY manf_id DESC LIMIT 1", (mapping_id_value,))
+                        cursor.execute(f"SELECT s3_manf_id FROM {manifest_name} WHERE mpg_id = %s AND vald_sts_cd = 'SUCCESS' ORDER BY s3_manf_id DESC LIMIT 1", (mapping_id_value,))
                         baseline = cursor.fetchone()
                         cursor.execute(f"SELECT 1 FROM {log_name} WHERE mpg_id = %s AND wrk_sts_cd = 'RUNNING' LIMIT 1", (mapping_id_value,))
                         running = cursor.fetchone() is not None
                         plan = transition_plan(current[0], target, None if baseline is None else baseline[0], running, current[1], current[2])
                         cursor.execute(f"UPDATE {table_name} SET load_sts_cd = %s, upd_dtm = GETDATE() WHERE mpg_id = %s", (plan["after"], mapping_id_value))
-                        cursor.execute(f"INSERT INTO {history_name} (mpg_id, bf_load_sts_cd, af_load_sts_cd, base_manf_id, trns_rsn) VALUES (%s, %s, %s, %s, %s)", (mapping_id_value, plan["before"], plan["after"], plan["baseline_manifest_id"], reason.strip()))
+                        cursor.execute(f"INSERT INTO {history_name} (mpg_id, bf_load_sts_cd, af_load_sts_cd, chg_rsn) VALUES (%s, %s, %s, %s)", (mapping_id_value, plan["before"], plan["after"], reason.strip()))
                         changed += 1
                 connection.commit()
             st.success(f"테이블매핑 {changed:,}건의 적재상태를 전환했습니다.", icon=":material/check_circle:")
@@ -553,63 +547,11 @@ def render_load_transition(maps: pd.DataFrame, values: dict[str, Any], schema_na
             st.error(f"상태 전환 실패: {error}", icon=":material/error:")
 
 
-def render_one_time_execution(maps: pd.DataFrame, values: dict[str, Any], schema_name: str, can_edit: Callable[[str, str], bool], query_frame: Callable[..., pd.DataFrame], connect: Callable[[dict[str, Any]], Any], qualified: Callable[[str, str], str]) -> None:
-    candidates = maps.copy()
-    if candidates.empty:
-        st.info("일회성으로 실행할 테이블매핑이 없습니다.", icon=":material/info:")
-        return
-    labels = {int(row.mpg_id): f"{int(row.mpg_id)} · {text(row.src_sch_nm)}.{text(row.src_tbl_nm)} → {text(row.tgt_sch_nm)}.{text(row.tgt_tbl_nm)}" for row in candidates.itertuples(index=False)}
-    selected = st.multiselect("일회성 실행 테이블", list(labels), format_func=lambda value: labels[value])
-    run_mode = st.selectbox("실행 범위", ["S3_ONLY", "S3_INS"], format_func=lambda value: "S3 추출·검증까지" if value == "S3_ONLY" else "S3 추출·검증·대상 적재·검증")
-    reason = st.text_area("일회성 실행 사유", max_chars=1000)
-    if selected:
-        details = candidates.loc[candidates.mpg_id.isin(selected), ["mpg_id", "src_sch_nm", "src_tbl_nm", "tgt_sch_nm", "tgt_tbl_nm"]].copy()
-        details["PARL_MTHD_CD"] = "전체"
-        details["PARL_CND_ARR"] = None
-        details = details.rename(columns={"mpg_id": "매핑ID", "src_sch_nm": "원천스키마", "src_tbl_nm": "원천테이블", "tgt_sch_nm": "대상스키마", "tgt_tbl_nm": "대상테이블", "PARL_MTHD_CD": "S3추출방식", "PARL_CND_ARR": "S3추출병렬조건배열"})
-        edited_details = st.data_editor(details, hide_index=True, disabled=["매핑ID", "원천스키마", "원천테이블", "대상스키마", "대상테이블"], column_config={"S3추출방식": st.column_config.SelectboxColumn("S3추출방식", options=["전체", "WHERE 병렬"], required=True), "S3추출병렬조건배열": st.column_config.TextColumn("S3추출병렬조건배열", help="WHERE 병렬일 때만 JSON 배열로 입력합니다.")}, key="once_work_table_editor")
-        st.caption("NONE은 테이블 전체를 S3로 추출합니다. WHERE는 배열의 각 조건을 병렬 S3 작업으로 실행합니다. INS는 항상 테이블별 단일 실행입니다.")
-    else:
-        edited_details = pd.DataFrame()
-    if st.button("일회성 DAG 생성", type="primary", icon=":material/terminal:"):
-        try:
-            if not selected:
-                raise ValueError("일회성 실행 테이블을 선택하십시오.")
-            if not reason.strip():
-                raise ValueError("일회성 실행 사유를 입력하십시오.")
-            if run_mode not in {"S3_ONLY", "S3_INS"}:
-                raise ValueError("실행 범위를 선택하십시오.")
-            log_name = qualified(schema_name, "tb_mig_run_log")
-            details_by_mapping = {int(row["매핑ID"]): row for row in edited_details.to_dict(orient="records")}
-            once_work_id = f"ONCE_{datetime.now():%Y%m%d%H%M%S}_{uuid4().hex[:6].upper()}"
-            table_configs: list[dict[str, Any]] = []
-            with connect(values) as connection:
-                with connection.cursor() as cursor:
-                    for mapping_id_value in selected:
-                        row = candidates.loc[candidates.mpg_id.eq(mapping_id_value)].iloc[0]
-                        if not can_edit(text(row.prj_cd), text(row.sbj_area_cd)):
-                            raise ValueError(f"테이블매핑 {mapping_id_value}의 수정 권한이 없습니다.")
-                        cursor.execute(f"SELECT 1 FROM {log_name} WHERE mpg_id = %s AND wrk_sts_cd = 'RUNNING' LIMIT 1", (mapping_id_value,))
-                        running = cursor.fetchone() is not None
-                        if running:
-                            raise ValueError(f"실행 중인 테이블은 일회성 작업에 추가할 수 없습니다: {mapping_id_value}")
-                        detail = details_by_mapping[int(mapping_id_value)]
-                        parallel = normalize_parallel("NONE" if detail["S3추출방식"] == "전체" else "WHERE", detail["S3추출병렬조건배열"])
-                        table_configs.append({"mpg_id": int(mapping_id_value), "parl_mthd_cd": parallel["method"], "parl_cnd_arr": parallel["conditions"] or None})
-            dag_source = once_controller_source(once_work_id, run_mode, table_configs, reason.strip())
-            compile(dag_source, f"{once_work_id}.py", "exec")
-            paths = save_dag_files(once_work_id, {f"mig_{once_work_id.lower()}_ctl": dag_source})
-            st.success(f"일회성 DAG를 생성했습니다: {paths[0].name}. 작업 조건·사유는 기존 실행로그에 기록됩니다. Airflow DAG 폴더에 배포 후 해당 DAG만 실행하십시오.", icon=":material/check_circle:")
-            st.rerun()
-        except Exception as error:
-            st.error(f"일회성 DAG 생성 실패: {error}", icon=":material/error:")
-
-
-def render_mapping_workspace(maps: pd.DataFrame, values: dict[str, Any], schema_name: str, can_edit: Callable[[str, str], bool], query_frame: Callable[..., pd.DataFrame], connect: Callable[[dict[str, Any]], Any], qualified: Callable[[str, str], str]) -> None:
+def render_mapping_workspace(maps: pd.DataFrame, values: dict[str, Any], schema_name: str, query_frame: Callable[..., pd.DataFrame], connect: Callable[[dict[str, Any]], Any], qualified: Callable[[str, str], str]) -> None:
     mode = st.segmented_control("매핑 업무", ["📝 단건 등록·수정", "🔄 적재상태 전환", "📤 일괄 업로드"], default="📝 단건 등록·수정", label_visibility="collapsed")
     if mode == "📝 단건 등록·수정":
-        render_single(maps, values, schema_name, can_edit, query_frame, connect, qualified)
+        render_single(maps, values, schema_name, query_frame, connect, qualified)
     elif mode == "🔄 적재상태 전환":
-        render_load_transition(maps, values, schema_name, can_edit, connect, qualified)
+        render_load_transition(maps, values, schema_name, connect, qualified)
     else:
-        render_upload(values, schema_name, can_edit, connect, qualified)
+        render_upload(values, schema_name, connect, qualified)

@@ -28,19 +28,19 @@ def column_maps(context: RuntimeContext, mapping_id: int) -> pd.DataFrame:
     return query_frame(context.values, query, (mapping_id,))
 
 
-def layout_dates(values: dict[str, Any], schema_name: str, table_name: str, source_connection_id: str) -> list[str]:
-    query = f"SELECT DISTINCT std_dt FROM {qualified(schema_name, table_name)} WHERE COALESCE(src_conn_id, 'SRC_GP') = %s ORDER BY std_dt DESC"
+def layout_dates(values: dict[str, Any], schema_name: str, source_connection_id: str) -> list[str]:
+    query = f"SELECT DISTINCT std_dt FROM {qualified(schema_name, 'tb_mig_src_layout')} WHERE src_conn_id = %s ORDER BY std_dt DESC"
     return [text(row[0]) for row in query_frame(values, query, (source_connection_id,)).itertuples(index=False, name=None) if text(row[0])]
 
 
-def source_layout(values: dict[str, Any], schema_name: str, table_name: str, source_connection_id: str, standard_date: str, owner: str, table: str) -> pd.DataFrame:
-    query = f'''SELECT colno AS "원천 컬럼순번", col AS "원천 컬럼명", attr AS "원천 컬럼설명", datatype AS "원천 데이터타입", len AS "원천 길이", ispk AS "원천 PK", nullable AS "원천 NULL허용"
-                  FROM {qualified(schema_name, table_name)}
-                 WHERE COALESCE(src_conn_id, 'SRC_GP') = %s
+def source_layout(values: dict[str, Any], schema_name: str, source_connection_id: str, standard_date: str, owner: str, table: str) -> pd.DataFrame:
+    query = f'''SELECT src_col_no AS "원천 컬럼순번", src_col_nm AS "원천 컬럼명", src_col_cmt AS "원천 컬럼설명", src_data_type AS "원천 데이터타입", src_data_len AS "원천 길이", CASE WHEN src_pk_yn THEN 'Y' ELSE '' END AS "원천 PK", CASE WHEN src_null_yn THEN 'Y' ELSE 'N' END AS "원천 NULL허용"
+                  FROM {qualified(schema_name, 'tb_mig_src_layout')}
+                 WHERE src_conn_id = %s
                    AND std_dt = %s
-                   AND UPPER(owner) = UPPER(%s)
-                   AND UPPER(tbl) = UPPER(%s)
-                 ORDER BY colno'''
+                   AND UPPER(src_sch_nm) = UPPER(%s)
+                   AND UPPER(src_tbl_nm) = UPPER(%s)
+                 ORDER BY src_col_no'''
     return query_frame(values, query, (source_connection_id, standard_date, owner, table))
 
 
@@ -115,7 +115,7 @@ def mapping_label(frame: pd.DataFrame, mapping_id: int) -> str:
     return f"{int(mapping_id)} · {row.src_sch_nm}.{row.src_tbl_nm} → {row.tgt_sch_nm}.{row.tgt_tbl_nm}"
 
 
-def render_target_reflection(context: RuntimeContext, layout_values: dict[str, Any], layout_schema: str, layout_table: str) -> None:
+def render_target_reflection(context: RuntimeContext) -> None:
     st.subheader("대상 반영안")
     try:
         mappings = table_maps(context)
@@ -128,7 +128,7 @@ def render_target_reflection(context: RuntimeContext, layout_values: dict[str, A
     mapping_id = st.selectbox("테이블 매핑", mappings.mpg_id.tolist(), format_func=lambda value: mapping_label(mappings, value), key="target_reflection_mapping")
     mapping = mappings.loc[mappings.mpg_id.eq(mapping_id)].iloc[0]
     try:
-        dates = layout_dates(layout_values, layout_schema, layout_table, text(mapping.src_conn_id))
+        dates = layout_dates(context.values, context.schema_name, text(mapping.src_conn_id))
     except Exception as error:
         st.error(f"원천 기준일을 조회할 수 없습니다: {error}", icon=":material/error:")
         return
@@ -138,7 +138,7 @@ def render_target_reflection(context: RuntimeContext, layout_values: dict[str, A
         st.markdown("#### 원천 구조")
         if selected_date:
             try:
-                source_frame = source_layout(layout_values, layout_schema, layout_table, text(mapping.src_conn_id), text(selected_date), text(mapping.src_sch_nm), text(mapping.src_tbl_nm))
+                source_frame = source_layout(context.values, context.schema_name, text(mapping.src_conn_id), text(selected_date), text(mapping.src_sch_nm), text(mapping.src_tbl_nm))
                 if source_frame.empty:
                     st.info("선택 기준일의 원천 레이아웃이 없습니다.", icon=":material/info:")
                 else:
@@ -151,7 +151,6 @@ def render_target_reflection(context: RuntimeContext, layout_values: dict[str, A
         st.markdown("#### 대상 반영안")
         columns = column_maps(context, int(mapping_id))
         st.dataframe(target_columns(columns), hide_index=True, height=360)
-    can_edit = True
     with st.form("target_design_form"):
         left, right = st.columns(2)
         with left:
@@ -165,7 +164,7 @@ def render_target_reflection(context: RuntimeContext, layout_values: dict[str, A
             tgt_sort_style = st.selectbox("대상 정렬 방식", sort_options, index=sort_options.index(current_sort) if current_sort in sort_options else 0)
             tgt_sort_cols = st.text_input("대상 정렬키", value=text(mapping.tgt_sort_cols))
             tgt_encd_auto_yn = st.toggle("대상 자동 압축", value=False if pd.isna(mapping.tgt_encd_auto_yn) else bool(mapping.tgt_encd_auto_yn))
-        saved = st.form_submit_button("대상 반영안 저장", type="primary", icon=":material/save:", disabled=not can_edit)
+        saved = st.form_submit_button("대상 반영안 저장", type="primary", icon=":material/save:")
     if saved:
         try:
             if tgt_dist_style == "KEY" and not text(tgt_dist_key_col):
@@ -182,7 +181,7 @@ def render_target_reflection(context: RuntimeContext, layout_values: dict[str, A
         st.markdown("#### 대상 DDL")
         st.code(ddl, language="sql")
         with st.container(horizontal=True, horizontal_alignment="left"):
-            if st.button("DDL 저장", icon=":material/save:", disabled=not can_edit, key="target_reflection_ddl_save"):
+            if st.button("DDL 저장", icon=":material/save:", key="target_reflection_ddl_save"):
                 save_ddl(context, int(mapping_id), ddl)
                 st.rerun()
             st.download_button("DDL 다운로드", ddl, file_name=f"{text(mapping.tgt_sch_nm)}_{text(mapping.tgt_tbl_nm)}_reference.sql", mime="text/sql", icon=":material/download:")

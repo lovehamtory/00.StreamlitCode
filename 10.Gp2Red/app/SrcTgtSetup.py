@@ -17,7 +17,7 @@ except ImportError:
 
 PROJECT_ROOT = Path(__file__).parent.parent
 SCHEMA_CONFIG = PROJECT_ROOT.parent / ".streamlit" / "migration_setup.toml"
-REQUIRED_TABLES = {"tb_mig_sbj_area", "tb_mig_sbj_dag_mpg", "tb_mig_conn", "tb_mig_tbl_mpg", "tb_mig_col_mpg", "tb_mig_tbl_dep", "tb_mig_run_log", "tb_mig_s3_manf", "tb_mig_tbl_load_hist", "tb_mig_vald_rslt", "tb_mig_vald_col_rslt", "tb_mig_artf_item"}
+REQUIRED_TABLES = {"tb_mig_conn", "tb_mig_sbj_area", "tb_mig_sbj_dag_mpg", "tb_mig_src_layout", "tb_mig_tbl_mpg", "tb_mig_col_mpg", "tb_mig_mpg_chg_hist", "tb_mig_s3_manf", "tb_mig_dag_run", "tb_mig_run_log", "tb_mig_vald_rslt", "tb_mig_vald_col_rslt", "tb_mig_tbl_load_hist", "tb_mig_artf_item"}
 
 
 def text(value: object) -> str:
@@ -122,8 +122,6 @@ def backup_metadata(values: dict[str, Any], schema: str, standard_date: str) -> 
 
 
 def render_initial_setup() -> None:
-    st.title("⚙️ 이관 초기 설정")
-    st.caption("⚙️ Created by ♡홍율파파♡")
     st.warning("DBA가 만든 스키마를 선택하십시오. 메타 생성은 그 안의 이관 메타 뷰·테이블만 삭제한 뒤 다시 만듭니다.", icon=":material/warning:")
     default_schema = configured_schema()
     value = st.text_input("메타데이터 스키마", value=default_schema, placeholder="예: migration_meta")

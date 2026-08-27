@@ -1,345 +1,134 @@
 from __future__ import annotations
 
-import re
-import sys
 from datetime import date
-from time import perf_counter
 from typing import Any
 
 import pandas as pd
 import streamlit as st
 
-from SrcTgtRuntime import query_frame, runtime_context
 from SrcTgtConnection import connection_frame, connection_label, runtime_connection_values, selectable_connections
+from SrcTgtRuntime import connect, qualified, query_frame, runtime_context, text
 from SrcTgtTargetReflection import render_target_reflection
 
-try:
-    import psycopg
-except ImportError:
-    psycopg = None
 
-
-LAYOUT_COLUMNS = ["SRC_CONN_ID", "STD_DT", "OWNER", "TBL", "ENTITY", "COLNO", "COL", "ATTR", "DATATYPE", "LEN", "ISPK", "NULLABLE"]
-
-
-def text(value: object) -> str:
-    return "" if value is None or pd.isna(value) else str(value).strip()
-
-
-def normalized(value: object) -> str:
-    return re.sub(r"\s+", " ", text(value)).upper()
-
-
-def normalized_series(values: pd.Series) -> pd.Series:
-    return values.astype("string").fillna("").str.strip().str.replace(r"\s+", " ", regex=True).str.upper()
-
-
-def identifier(value: str) -> str:
-    name = text(value)
-    if not name or "\x00" in name or len(name.encode("utf-8")) > 127:
-        raise ValueError(f"식별자 형식이 올바르지 않습니다: {value}")
-    return '"' + name.replace('"', '""') + '"'
-
-
-def qualified(schema_name: str, table_name: str) -> str:
-    return f"{identifier(schema_name)}.{identifier(table_name)}"
-
-
-def config(section: str) -> dict[str, Any]:
-    required = ("host", "port", "database", "user", "password")
-    if section not in st.secrets:
-        raise ValueError(f".streamlit/secrets.toml에 [{section}] 설정이 없습니다.")
-    values = dict(st.secrets[section])
-    missing = [key for key in required if not text(values.get(key))]
-    if missing:
-        raise ValueError(f"[{section}] 필수 항목이 없습니다: {', '.join(missing)}")
-    return values
-
-
-def layout_settings(target: dict[str, Any]) -> tuple[str, str]:
-    values = dict(st.secrets.get("layout_history", {}))
-    return text(values.get("schema")) or text(target.get("default_schema")) or "public", text(values.get("table")) or "TB_TABLE_LAYOUT_GP"
-
-
-def connect(values: dict[str, Any]) -> Any:
-    if psycopg is None:
-        raise RuntimeError(f"psycopg가 현재 실행 Python에 설치되지 않았습니다: {sys.executable}")
-    arguments: dict[str, Any] = {"host": text(values["host"]), "port": int(values["port"]), "dbname": text(values["database"]), "user": text(values["user"]), "password": text(values["password"]), "connect_timeout": int(values.get("connect_timeout", 15))}
-    if text(values.get("sslmode")):
-        arguments["sslmode"] = text(values["sslmode"])
-    return psycopg.connect(**arguments)
-
-
-def init_state() -> None:
-    for key, value in {"gp_layout_comparison": None, "gp_layout_capture": None}.items():
-        st.session_state.setdefault(key, value)
-
-
-def apply_green_style() -> None:
-    st.markdown("""<style>
-    [data-testid="stAppViewContainer"]{background:radial-gradient(circle at 18% -10%,#1d6648 0,#10271d 35%,#07140f 100%)}
-    [data-testid="stHeader"]{background:transparent}.block-container{max-width:1520px;padding-top:2.1rem}
-    .hero{padding:.8rem 1.05rem;margin-bottom:.8rem;background:linear-gradient(105deg,#195b40,#102b20);border:1px solid #34815d;border-left:4px solid #7de8ac;border-radius:10px;color:#f7fffa}.hero h1{margin:0;font-size:1.28rem;line-height:1.2;letter-spacing:-.02em}.hero p{margin:.3rem 0 0;color:#b9dcc8;font-size:.72rem}
-    [data-testid="stDataFrame"]{border:1px solid #3e7555;border-radius:9px;overflow:hidden}[data-testid="stMetric"]{background:#173224;border:1px solid #3e7555;border-radius:9px}[data-testid="stButton"]>button{border-color:#4a9a6d;background:#1f6848;color:#fff}[data-testid="stButton"]>button[kind="primary"]{background:linear-gradient(100deg,#267c55,#4fba7a)}[data-testid="stProgressBar"]>div>div{background:linear-gradient(90deg,#2f8d61,#83dc9f)}</style>""", unsafe_allow_html=True)
-
-
-def snapshot_label(value: object) -> str:
-    raw = text(value)
-    digits = re.sub(r"\D", "", raw)
-    return f"{digits[:4]}-{digits[4:6]}-{digits[6:]}" if len(digits) == 8 else raw
-
-
-def ensure_layout_connection_column(target: dict[str, Any], schema_name: str, table_name: str) -> None:
-    with connect(target) as connection:
+def source_schemas(values: dict[str, Any]) -> list[str]:
+    with connect(values) as connection:
         with connection.cursor() as cursor:
-            cursor.execute("SELECT 1 FROM information_schema.columns WHERE table_schema = %s AND table_name = %s AND column_name = 'src_conn_id'", (schema_name.lower(), table_name.lower()))
-            if cursor.fetchone() is None:
-                cursor.execute(f"ALTER TABLE {qualified(schema_name, table_name)} ADD COLUMN SRC_CONN_ID VARCHAR(100)")
-        connection.commit()
-
-
-@st.cache_data(ttl=120, show_spinner=False)
-def fetch_snapshot_dates(target_key: tuple[str, str, str, int], schema_name: str, table_name: str, source_connection_id: str) -> list[str]:
-    target = {"host": target_key[0], "database": target_key[1], "user": target_key[2], "port": target_key[3], "password": st.secrets["redshift_sql"]["password"], "sslmode": st.secrets["redshift_sql"].get("sslmode", ""), "connect_timeout": st.secrets["redshift_sql"].get("connect_timeout", 15)}
-    with connect(target) as connection:
-        with connection.cursor() as cursor:
-            cursor.execute(f"SELECT DISTINCT STD_DT FROM {qualified(schema_name, table_name)} WHERE COALESCE(SRC_CONN_ID, 'SRC_GP') = %s ORDER BY STD_DT", (source_connection_id,))
-            return [text(row[0]) for row in cursor.fetchall() if text(row[0])]
-
-
-def dataframe_from_rows(rows: list[tuple[Any, ...]], columns: list[str]) -> pd.DataFrame:
-    return pd.DataFrame(rows, columns=columns)
-
-
-def fetch_layout_pair(target: dict[str, Any], schema_name: str, table_name: str, source_connection_id: str, before_date: str, after_date: str) -> tuple[pd.DataFrame, pd.DataFrame]:
-    query = f"SELECT {', '.join(LAYOUT_COLUMNS)} FROM {qualified(schema_name, table_name)} WHERE COALESCE(SRC_CONN_ID, 'SRC_GP') = %s AND STD_DT IN (%s, %s) ORDER BY OWNER, TBL, COLNO"
-    with connect(target) as connection:
-        with connection.cursor() as cursor:
-            cursor.execute(query, (source_connection_id, before_date, after_date))
-            frame = dataframe_from_rows(cursor.fetchall(), LAYOUT_COLUMNS)
-    return frame[frame.STD_DT.map(text) == before_date].copy(), frame[frame.STD_DT.map(text) == after_date].copy()
-
-
-def colno_order(value: object) -> int:
-    try:
-        return int(float(text(value)))
-    except ValueError:
-        return 999999999
-
-
-def table_groups(frame: pd.DataFrame) -> dict[tuple[str, str], pd.DataFrame]:
-    prepared = frame.copy()
-    prepared["_OWNER"] = prepared.OWNER.map(normalized)
-    prepared["_TABLE"] = prepared.TBL.map(normalized)
-    prepared["_ORDER"] = prepared.COLNO.map(colno_order)
-    for column in ("COLNO", "COL", "ATTR", "DATATYPE", "LEN", "ISPK", "NULLABLE"):
-        prepared[f"_SIG_{column}"] = normalized_series(prepared[column])
-    return {key: group.copy() for key, group in prepared.groupby(["_OWNER", "_TABLE"], dropna=False, sort=False)}
-
-
-def entity(frame: pd.DataFrame) -> str:
-    values = [text(value) for value in frame.ENTITY.tolist() if text(value)] if not frame.empty else []
-    return values[0] if values else ""
-
-
-def table_signature(frame: pd.DataFrame) -> tuple[tuple[str, ...], ...]:
-    columns = ["_SIG_COLNO", "_SIG_COL", "_SIG_ATTR", "_SIG_DATATYPE", "_SIG_LEN", "_SIG_ISPK", "_SIG_NULLABLE"]
-    return tuple(frame.sort_values("_ORDER")[columns].itertuples(index=False, name=None))
-
-
-def compare_layouts(before: pd.DataFrame, after: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
-    before_groups, after_groups = table_groups(before), table_groups(after)
-    tables: list[dict[str, str]] = []
-    columns: list[dict[str, str]] = []
-    for owner_name, table_name in sorted(set(before_groups) | set(after_groups)):
-        previous = before_groups.get((owner_name, table_name), pd.DataFrame(columns=before.columns))
-        current = after_groups.get((owner_name, table_name), pd.DataFrame(columns=after.columns))
-        status = "신규" if previous.empty else "삭제" if current.empty else "변경" if table_signature(previous) != table_signature(current) or entity(previous) != entity(current) else ""
-        if not status:
-            continue
-        tables.append({"스키마": owner_name, "테이블": table_name, "엔티티(전)": entity(previous), "엔티티(후)": entity(current), "구분": status})
-        previous_by_order = {normalized(row.COLNO): row for row in previous.itertuples(index=False)}
-        current_by_order = {normalized(row.COLNO): row for row in current.itertuples(index=False)}
-        for order in sorted(set(previous_by_order) | set(current_by_order), key=colno_order):
-            old, new = previous_by_order.get(order), current_by_order.get(order)
-            names = ("COL", "ATTR", "DATATYPE", "LEN", "ISPK", "NULLABLE")
-            if old is not None and new is not None and all(normalized(getattr(old, name)) == normalized(getattr(new, name)) for name in names):
-                continue
-            columns.append({"스키마": owner_name, "테이블": table_name, "엔티티": entity(current) or entity(previous), "구분": "신규" if old is None else "삭제" if new is None else "변경", "컬럼순서": order, "컬럼명(전)": text(getattr(old, "COL", "")), "컬럼명(후)": text(getattr(new, "COL", "")), "속성(전)": text(getattr(old, "ATTR", "")), "속성(후)": text(getattr(new, "ATTR", "")), "타입(전)": text(getattr(old, "DATATYPE", "")), "타입(후)": text(getattr(new, "DATATYPE", "")), "길이(전)": text(getattr(old, "LEN", "")), "길이(후)": text(getattr(new, "LEN", "")), "PK(전)": text(getattr(old, "ISPK", "")), "PK(후)": text(getattr(new, "ISPK", "")), "NOT NULL(전)": text(getattr(old, "NULLABLE", "")), "NOT NULL(후)": text(getattr(new, "NULLABLE", ""))})
-    return pd.DataFrame(tables), pd.DataFrame(columns)
-
-
-def list_source_schemas(source: dict[str, Any]) -> list[str]:
-    query = "SELECT schema_name FROM information_schema.schemata WHERE schema_name NOT IN ('information_schema','pg_catalog') AND schema_name NOT LIKE 'pg_%' ORDER BY schema_name"
-    with connect(source) as connection:
-        with connection.cursor() as cursor:
-            cursor.execute(query)
+            cursor.execute("SELECT schema_name FROM information_schema.schemata WHERE schema_name NOT IN ('information_schema', 'pg_catalog') AND schema_name NOT LIKE 'pg_%' ORDER BY schema_name")
             return [text(row[0]) for row in cursor.fetchall()]
 
 
-def fetch_source_layout(source: dict[str, Any], source_connection_id: str, schemas: list[str], standard_date: str) -> pd.DataFrame:
+def source_layout(values: dict[str, Any], connection_id: str, standard_date: str, schemas: list[str]) -> pd.DataFrame:
     if not schemas:
         raise ValueError("원천 스키마를 한 개 이상 선택하십시오.")
-    query = """
-        SELECT %s, %s, c.table_schema, c.table_name, COALESCE(obj_description(pc.oid, 'pg_class'), ''),
-               c.ordinal_position, c.column_name, COALESCE(col_description(pc.oid, c.ordinal_position), ''),
-               c.data_type, COALESCE(c.character_maximum_length::text, c.numeric_precision::text, ''),
-               CASE WHEN pk.column_name IS NULL THEN '' ELSE 'Y' END, c.is_nullable
-          FROM information_schema.columns c
-          JOIN pg_namespace pn ON pn.nspname = c.table_schema
-          JOIN pg_class pc ON pc.relnamespace = pn.oid AND pc.relname = c.table_name
-          LEFT JOIN (
-              SELECT kcu.table_schema, kcu.table_name, kcu.column_name
-                FROM information_schema.table_constraints tc
-                JOIN information_schema.key_column_usage kcu
-                  ON kcu.constraint_name = tc.constraint_name
-                 AND kcu.table_schema = tc.table_schema
-               WHERE tc.constraint_type = 'PRIMARY KEY'
-          ) pk ON pk.table_schema = c.table_schema AND pk.table_name = c.table_name AND pk.column_name = c.column_name
-         WHERE c.table_schema = ANY(%s)
-         ORDER BY c.table_schema, c.table_name, c.ordinal_position
-    """
-    with connect(source) as connection:
+    query = '''SELECT %s, %s, c.table_schema, c.table_name, COALESCE(obj_description(pc.oid, 'pg_class'), ''), c.ordinal_position, c.column_name, COALESCE(col_description(pc.oid, c.ordinal_position), ''), c.data_type, COALESCE(c.character_maximum_length::text, c.numeric_precision::text, ''), CASE WHEN pk.column_name IS NULL THEN FALSE ELSE TRUE END, CASE WHEN c.is_nullable = 'YES' THEN TRUE ELSE FALSE END
+                 FROM information_schema.columns c
+                 JOIN pg_namespace pn ON pn.nspname = c.table_schema
+                 JOIN pg_class pc ON pc.relnamespace = pn.oid AND pc.relname = c.table_name
+                 LEFT JOIN (
+                     SELECT kcu.table_schema, kcu.table_name, kcu.column_name
+                       FROM information_schema.table_constraints tc
+                       JOIN information_schema.key_column_usage kcu ON kcu.constraint_name = tc.constraint_name AND kcu.table_schema = tc.table_schema
+                      WHERE tc.constraint_type = 'PRIMARY KEY'
+                 ) pk ON pk.table_schema = c.table_schema AND pk.table_name = c.table_name AND pk.column_name = c.column_name
+                WHERE c.table_schema = ANY(%s)
+                ORDER BY c.table_schema, c.table_name, c.ordinal_position'''
+    with connect(values) as connection:
         with connection.cursor() as cursor:
-            cursor.execute(query, (source_connection_id, standard_date, schemas))
-            return dataframe_from_rows(cursor.fetchall(), LAYOUT_COLUMNS)
+            cursor.execute(query, (connection_id, standard_date, schemas))
+            rows = cursor.fetchall()
+    return pd.DataFrame(rows, columns=["SRC_CONN_ID", "STD_DT", "SRC_SCH_NM", "SRC_TBL_NM", "SRC_TBL_CMT", "SRC_COL_NO", "SRC_COL_NM", "SRC_COL_CMT", "SRC_DATA_TYPE", "SRC_DATA_LEN", "SRC_PK_YN", "SRC_NULL_YN"])
 
 
-def save_layout(target: dict[str, Any], schema_name: str, table_name: str, source_connection_id: str, standard_date: str, selected_schemas: list[str], layout: pd.DataFrame) -> int:
+def save_layout(context_values: dict[str, Any], schema_name: str, layout: pd.DataFrame, connection_id: str, standard_date: str, schemas: list[str]) -> int:
     if layout.empty:
-        raise ValueError("적재할 원천 레이아웃이 없습니다.")
-    owners = [text(value) for value in selected_schemas if text(value)]
-    if not owners:
-        raise ValueError("삭제할 원천 스키마를 선택하십시오.")
-    insert = f"INSERT INTO {qualified(schema_name, table_name)} ({', '.join(LAYOUT_COLUMNS)}) VALUES ({', '.join('%s' for _ in LAYOUT_COLUMNS)})"
-    owner_placeholders = ", ".join("%s" for _ in owners)
-    with connect(target) as connection:
+        raise ValueError("수집된 원천 레이아웃이 없습니다.")
+    table_name = qualified(schema_name, "tb_mig_src_layout")
+    with connect(context_values) as connection:
         with connection.cursor() as cursor:
-            cursor.execute(f"DELETE FROM {qualified(schema_name, table_name)} WHERE COALESCE(SRC_CONN_ID, 'SRC_GP')=%s AND STD_DT=%s AND OWNER IN ({owner_placeholders})", (source_connection_id, standard_date, *owners))
-            cursor.executemany(insert, [tuple(row) for row in layout[LAYOUT_COLUMNS].itertuples(index=False, name=None)])
+            for schema in schemas:
+                cursor.execute(f"DELETE FROM {table_name} WHERE src_conn_id = %s AND std_dt = %s AND src_sch_nm = %s", (connection_id, standard_date, schema))
+            cursor.executemany(f"INSERT INTO {table_name} (src_conn_id, std_dt, src_sch_nm, src_tbl_nm, src_tbl_cmt, src_col_no, src_col_nm, src_col_cmt, src_data_type, src_data_len, src_pk_yn, src_null_yn) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)", [tuple(row) for row in layout.itertuples(index=False, name=None)])
         connection.commit()
     return len(layout)
 
 
-def number_columns(frame: pd.DataFrame) -> dict[str, Any]:
-    return {column: st.column_config.NumberColumn(format="localized") for column in frame.columns if pd.api.types.is_numeric_dtype(frame[column])}
+def dates(context_values: dict[str, Any], schema_name: str, connection_id: str) -> list[str]:
+    frame = query_frame(context_values, f"SELECT DISTINCT std_dt FROM {qualified(schema_name, 'tb_mig_src_layout')} WHERE src_conn_id = %s ORDER BY std_dt", (connection_id,))
+    return [text(value) for value in frame.std_dt.tolist()]
 
 
-def render_comparison() -> None:
-    comparison = st.session_state.gp_layout_comparison
-    if comparison is None:
-        return
-    table_changes, column_changes = comparison["tables"], comparison["columns"]
-    if table_changes.empty:
-        st.success("변경 내역이 없습니다.", icon=":material/check_circle:")
-        return
-    summary = table_changes.pivot_table(index="스키마", columns="구분", values="테이블", aggfunc="count", fill_value=0).reindex(columns=["신규", "삭제", "변경"], fill_value=0).reset_index()
-    summary["합계"] = summary[["신규", "삭제", "변경"]].sum(axis=1)
-    summary = pd.concat([summary, pd.DataFrame([{"스키마":"합계", "신규":summary["신규"].sum(), "삭제":summary["삭제"].sum(), "변경":summary["변경"].sum(), "합계":summary["합계"].sum()}])], ignore_index=True)
-    left, right = st.columns((0.8, 1.6))
-    with left:
-        with st.container(border=True):
-            st.markdown("#### :material/analytics: 요약")
-            event = st.dataframe(summary, hide_index=True, on_select="rerun", selection_mode="multi-row", key="gp_layout_schema", height=380, column_config=number_columns(summary))
-    selected = [text(summary.iloc[index]["스키마"]) for index in event.selection.rows]
-    schemas = sorted(table_changes["스키마"].unique()) if not selected or "합계" in selected else selected
-    selected_tables = table_changes[table_changes["스키마"].isin(schemas)].copy()
-    with right:
-        with st.container(border=True):
-            st.markdown("#### :material/table_chart: 테이블")
-            table_event = st.dataframe(selected_tables, hide_index=True, on_select="rerun", selection_mode="multi-row", key="gp_layout_table", height=380)
-    selected_keys = {(normalized(selected_tables.iloc[index]["스키마"]), normalized(selected_tables.iloc[index]["테이블"])) for index in table_event.selection.rows}
-    shown_columns = column_changes[column_changes.apply(lambda row: (normalized(row["스키마"]), normalized(row["테이블"])) in selected_keys, axis=1)] if selected_keys else column_changes
-    with st.container(border=True):
-        st.markdown("#### :material/view_column: 컬럼")
-        st.dataframe(shown_columns, hide_index=True, height=380, column_config=number_columns(shown_columns))
+def comparison(context_values: dict[str, Any], schema_name: str, connection_id: str, before: str, after: str) -> tuple[pd.DataFrame, pd.DataFrame]:
+    query = f'''SELECT std_dt, src_sch_nm, src_tbl_nm, src_col_no, src_col_nm, src_data_type, src_data_len, src_pk_yn, src_null_yn
+                  FROM {qualified(schema_name, 'tb_mig_src_layout')}
+                 WHERE src_conn_id = %s AND std_dt IN (%s, %s)'''
+    frame = query_frame(context_values, query, (connection_id, before, after))
+    old = frame.loc[frame.std_dt.map(text).eq(before)].copy()
+    new = frame.loc[frame.std_dt.map(text).eq(after)].copy()
+    keys = ["src_sch_nm", "src_tbl_nm", "src_col_no"]
+    merged = old.merge(new, on=keys, how="outer", suffixes=("_BF", "_AF"), indicator=True)
+    fields = ["src_col_nm", "src_data_type", "src_data_len", "src_pk_yn", "src_null_yn"]
+    changed = merged.loc[(merged._merge.ne("both")) | (merged.apply(lambda row: any(text(row[f"{field}_BF"]) != text(row[f"{field}_AF"]) for field in fields), axis=1))].copy()
+    changed["CHG_DVSN"] = changed._merge.map({"left_only": "삭제", "right_only": "신규", "both": "변경"})
+    tables = changed.groupby(["src_sch_nm", "src_tbl_nm", "CHG_DVSN"], dropna=False).size().reset_index(name="COL_CNT")
+    return tables, changed
 
 
-def main() -> None:
-    access = runtime_context()
-    init_state(); apply_green_style()
+st.title("🧱 구조·변경")
+st.caption("⚙️ Created by ♡홍율파파♡")
+
+try:
+    context = runtime_context()
+except Exception:
+    st.info("초기 설정 메뉴에서 메타 연결과 스키마를 준비한 뒤 다시 선택하십시오.", icon=":material/settings:")
+    st.stop()
+
+mode = st.segmented_control("업무", ["원천 레이아웃", "변경 비교", "대상 반영안"], default="원천 레이아웃", label_visibility="collapsed")
+if mode == "대상 반영안":
+    render_target_reflection(context)
+    st.stop()
+
+try:
+    connections = connection_frame(query_frame, context.values, context.schema_name, qualified, active_only=True)
+    sources = selectable_connections(connections)
+    sources = sources.loc[sources.dbms_cd.map(text).str.upper().eq("GREENPLUM")]
+    if sources.empty:
+        raise ValueError("Greenplum 원천 접속정보를 등록하십시오.")
+    connection_id = st.selectbox("원천 접속", sources.conn_id.tolist(), format_func=lambda item: connection_label(sources, item))
+except Exception as error:
+    st.error(f"원천 접속 조회 실패: {error}", icon=":material/error:")
+    st.stop()
+
+if mode == "원천 레이아웃":
     try:
-        target = config("redshift_sql")
+        source_values = runtime_connection_values(sources, connection_id)
+        schemas = source_schemas(source_values)
     except Exception as error:
-        st.error(str(error), icon=":material/error:")
+        st.error(f"원천 스키마 조회 실패: {error}", icon=":material/error:")
         st.stop()
-    try:
-        connections = connection_frame(query_frame, access.values, access.schema_name, qualified, active_only=True)
-        source_connections = selectable_connections(connections)
-        source_connections = source_connections.loc[source_connections.dbms_cd.map(text).str.upper().eq("GREENPLUM")].copy()
-        if source_connections.empty:
-            raise ValueError("사용 중인 Greenplum 원천 접속정보를 접속관리에서 등록하십시오.")
-        source_connection_id = st.selectbox("원천 접속", source_connections.conn_id.tolist(), format_func=lambda value: connection_label(source_connections, value), key="layout_source_connection")
-        source = runtime_connection_values(source_connections, source_connection_id)
-    except Exception as error:
-        st.error(f"원천 접속정보 조회 실패: {error}", icon=":material/error:")
-        st.stop()
-    schema_name, table_name = layout_settings(target)
-    try:
-        ensure_layout_connection_column(target, schema_name, table_name)
-    except Exception as error:
-        st.error(f"원천 레이아웃 구조 준비 실패: {error}", icon=":material/error:")
-        st.stop()
-    st.markdown('<div class="hero"><h1>✦ 구조조회</h1><p>⚙️ Created by ♡홍율파파♡</p></div>', unsafe_allow_html=True)
-    mode = st.segmented_control("구조 업무", ["원천 레이아웃", "대상 반영안"], default="원천 레이아웃", label_visibility="collapsed", key="structure_mode")
-    if mode == "대상 반영안":
-        render_target_reflection(access, target, schema_name, table_name)
-        return
-    try:
-        target_key = (text(target["host"]), text(target["database"]), text(target["user"]), int(target["port"]))
-        dates = fetch_snapshot_dates(target_key, schema_name, table_name, source_connection_id)
-    except Exception as error:
-        st.error(f"레이아웃 기준일 조회 실패: {error}", icon=":material/error:")
-        st.stop()
-    labels = [snapshot_label(value) for value in dates]
-    with st.sidebar:
-        st.header(":material/tune: 조회 조건")
-        if len(dates) >= 2:
-            before_label = st.selectbox("비교 기준일", labels, index=max(0, len(labels)-2))
-            after_label = st.selectbox("대상 기준일", labels, index=len(labels)-1)
-            compared = st.button("변경 내역 조회", type="primary", icon=":material/search:", width="stretch")
-        else:
-            before_label = after_label = ""
-            compared = False
-            st.info("기준일 두 건 이상 필요", icon=":material/info:")
-        with st.expander(":material/database_upload: 당일 레이아웃 적재", expanded=False):
-            try:
-                schemas = list_source_schemas(source)
-                selected_schemas = st.multiselect("원천 스키마", schemas, default=[text(source.get("default_schema"))] if text(source.get("default_schema")) in schemas else [])
-                standard_day = st.date_input("기준일", value=date.today(), format="YYYY-MM-DD")
-                captured = st.button("레이아웃 적재", type="primary", icon=":material/upload:", width="stretch")
-            except Exception as error:
-                st.error(str(error), icon=":material/error:")
-                captured = False
-                selected_schemas = []
-                standard_day = date.today()
-    if compared:
-        if before_label == after_label:
-            st.error("서로 다른 기준일을 선택하십시오.")
-        else:
-            before_date, after_date = dates[labels.index(before_label)], dates[labels.index(after_label)]
-            try:
-                with st.status("변경 내역 조회", expanded=True) as status:
-                    started = perf_counter(); before_layout, after_layout = fetch_layout_pair(target, schema_name, table_name, source_connection_id, before_date, after_date); loaded = perf_counter()-started
-                    tables, columns = compare_layouts(before_layout, after_layout)
-                    status.update(label=f"완료 · {len(tables):,} 테이블 · {len(columns):,} 컬럼 · {loaded:.1f}초", state="complete", expanded=False)
-                st.session_state.gp_layout_comparison = {"tables": tables, "columns": columns, "before": before_layout, "after": after_layout}
-            except Exception as error:
-                st.error(str(error), icon=":material/error:")
+    with st.form("layout_capture"):
+        standard_day = st.date_input("기준일", value=date.today(), format="YYYY-MM-DD")
+        selected = st.multiselect("원천 스키마", schemas)
+        captured = st.form_submit_button("수집", type="primary", icon=":material/download:")
     if captured:
         try:
-            standard_date = standard_day.strftime("%Y%m%d")
-            with st.status("원천 레이아웃 적재", expanded=True) as status:
-                layout = fetch_source_layout(source, source_connection_id, selected_schemas, standard_date)
-                count = save_layout(target, schema_name, table_name, source_connection_id, standard_date, selected_schemas, layout)
-                status.update(label=f"완료 · {count:,} 컬럼", state="complete", expanded=False)
-            fetch_snapshot_dates.clear()
-            st.session_state.gp_layout_capture = {"date": standard_date, "count": count}
-            st.toast(f"{standard_date} 레이아웃을 적재했습니다.", icon=":material/check_circle:")
+            standard = standard_day.strftime("%Y%m%d")
+            layout = source_layout(source_values, connection_id, standard, selected)
+            count = save_layout(context.values, context.schema_name, layout, connection_id, standard, selected)
+            st.success(f"{count:,} 컬럼을 수집했습니다.", icon=":material/check_circle:")
         except Exception as error:
-            st.error(str(error), icon=":material/error:")
-    render_comparison()
-
-
-if __name__ == "__main__":
-    main()
+            st.error(f"원천 레이아웃 수집 실패: {error}", icon=":material/error:")
+else:
+    try:
+        available = dates(context.values, context.schema_name, connection_id)
+        if len(available) < 2:
+            raise ValueError("비교할 기준일이 두 건 이상 필요합니다.")
+        before, after = st.selectbox("이전 기준일", available, index=len(available) - 2), st.selectbox("비교 기준일", available, index=len(available) - 1)
+        if st.button("비교", type="primary", icon=":material/compare_arrows:"):
+            if before == after:
+                raise ValueError("서로 다른 기준일을 선택하십시오.")
+            tables, columns = comparison(context.values, context.schema_name, connection_id, before, after)
+            st.dataframe(tables.rename(columns={"src_sch_nm": "원천스키마", "src_tbl_nm": "원천테이블", "CHG_DVSN": "변경구분", "COL_CNT": "변경컬럼수"}), hide_index=True)
+            st.dataframe(columns.rename(columns={"src_sch_nm": "원천스키마", "src_tbl_nm": "원천테이블", "src_col_no": "원천컬럼순번", "CHG_DVSN": "변경구분"}), hide_index=True, height=420)
+    except Exception as error:
+        st.error(f"변경 비교 실패: {error}", icon=":material/error:")

@@ -8,7 +8,7 @@ import streamlit as st
 
 
 def validation_history(query_frame: Callable[..., pd.DataFrame], values: dict[str, Any], schema_name: str, qualified: Callable[[str, str], str], start_dt: date, end_dt: date) -> pd.DataFrame:
-    query = f'''SELECT V.vald_hist_id, V.exec_run_id, V.dag_nm, V.dag_run_id, V.mpg_id,
+    query = f'''SELECT V.vald_hist_id, V.dag_nm, V.dag_run_id, V.mpg_id,
                       T.prj_cd, T.sbj_area_cd, T.src_sch_nm || '.' || T.src_tbl_nm AS src_tbl,
                       T.tgt_sch_nm || '.' || T.tgt_tbl_nm AS tgt_tbl, V.vald_dvsn_cd, V.s3_manf_path,
                       V.cnt_vald_sts_cd, V.src_cnt, V.tgt_cnt, V.cnt_diff, V.sum_vald_sts_cd,
@@ -57,7 +57,7 @@ def render_validation(values: dict[str, Any], schema_name: str, query_frame: Cal
     summary[1].metric("성공", f"{int(filtered.vald_sts_cd.eq('SUCCESS').sum()):,}건")
     summary[2].metric("실패", f"{int(filtered.vald_sts_cd.eq('FAILED').sum()):,}건")
     summary[3].metric("진행", f"{int(filtered.vald_sts_cd.eq('RUNNING').sum()):,}건")
-    shown = filtered.rename(columns={"exec_run_id": "이관실행ID", "dag_nm": "DAG명", "dag_run_id": "DAG실행ID", "mpg_id": "테이블매핑ID", "prj_cd": "프로젝트코드", "sbj_area_cd": "주제영역코드", "src_tbl": "원천테이블", "tgt_tbl": "대상테이블", "vald_dvsn_cd": "검증구분", "s3_manf_path": "S3매니페스트", "cnt_vald_sts_cd": "건수검증", "src_cnt": "원천건수", "tgt_cnt": "대상건수", "cnt_diff": "건수차이", "sum_vald_sts_cd": "합계검증", "hsh_vald_sts_cd": "해시검증", "vald_sts_cd": "검증상태", "vald_stt_dtm": "검증시작일시", "vald_end_dtm": "검증종료일시", "vald_elps_sec": "검증경과초", "vald_msg": "검증메시지"})
+    shown = filtered.rename(columns={"dag_nm": "DAG명", "dag_run_id": "DAG실행ID", "mpg_id": "테이블매핑ID", "prj_cd": "프로젝트코드", "sbj_area_cd": "주제영역코드", "src_tbl": "원천테이블", "tgt_tbl": "대상테이블", "vald_dvsn_cd": "검증구분", "s3_manf_path": "S3매니페스트", "cnt_vald_sts_cd": "건수검증", "src_cnt": "원천건수", "tgt_cnt": "대상건수", "cnt_diff": "건수차이", "sum_vald_sts_cd": "합계검증", "hsh_vald_sts_cd": "해시검증", "vald_sts_cd": "검증상태", "vald_stt_dtm": "검증시작일시", "vald_end_dtm": "검증종료일시", "vald_elps_sec": "검증경과초", "vald_msg": "검증메시지"})
     st.dataframe(shown, hide_index=True, height=430)
     if not filtered.empty:
         selected = st.selectbox("컬럼 검증결과", filtered.vald_hist_id.tolist(), format_func=lambda value: f"{value} · {filtered.loc[filtered.vald_hist_id.eq(value)].iloc[0].tgt_tbl}")
