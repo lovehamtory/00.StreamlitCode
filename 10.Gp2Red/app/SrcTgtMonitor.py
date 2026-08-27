@@ -72,7 +72,7 @@ else:
     st.title("📈 실행 현황")
     st.caption("⚙️ Created by ♡홍율파파♡")
 
-    @st.fragment(run_every="30s")
+    @st.fragment(run_every="5s")
     def auto_refresh() -> None:
         render_monitor(monitor_context)
 

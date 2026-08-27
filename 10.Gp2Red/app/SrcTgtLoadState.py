@@ -5,7 +5,8 @@ from typing import Any
 
 
 LOAD_STATES = {"FULL", "INCR"}
-INCR_BASIS_CODES = {"DT", "YMD", "YM", "WM_DTM", "PK"}
+SYSTEM_COLUMN_FORMATS = {"YYYYMMDD", "YYYYMMDDHH24MISS", "TIMESTAMP", "DATE"}
+INCREMENT_METHODS = {"PK_MERGE", "APPEND"}
 PARALLEL_METHODS = {"NONE", "WHERE"}
 
 
@@ -32,7 +33,20 @@ def normalize_parallel(method: object, condition_array: object) -> dict[str, Any
     return {"method": parallel_method, "count": len(conditions), "conditions": conditions}
 
 
-def transition_plan(current_state: object, target_state: object, baseline_manifest_id: object, running: bool, basis_code: object, basis_column: object) -> dict[str, str | int | None]:
+def normalize_name_array(value: object, field_name: str, required: bool = False) -> list[str]:
+    try:
+        raw = value if isinstance(value, list) else json.loads(text(value) or "[]")
+    except json.JSONDecodeError as error:
+        raise ValueError(f"{field_name}은 JSON 문자열 배열이어야 합니다.") from error
+    if not isinstance(raw, list) or any(not text(item) for item in raw):
+        raise ValueError(f"{field_name}은 비어 있지 않은 JSON 문자열 배열이어야 합니다.")
+    result = [text(item) for item in raw]
+    if required and not result:
+        raise ValueError(f"{field_name}은 필수입니다.")
+    return result
+
+
+def transition_plan(current_state: object, target_state: object, baseline_manifest_id: object, running: bool, system_columns: object, system_format: object, increment_method: object, increment_columns: object) -> dict[str, str | int | None]:
     current = text(current_state).upper()
     target = text(target_state).upper()
     if current not in LOAD_STATES or target not in LOAD_STATES:
@@ -41,16 +55,11 @@ def transition_plan(current_state: object, target_state: object, baseline_manife
         raise ValueError("실행 중인 테이블은 적재상태를 전환할 수 없습니다.")
     if current == target:
         raise ValueError("현재 적재방식과 동일한 방식으로는 전환할 수 없습니다.")
+    if target == "INCR":
+        normalize_name_array(system_columns, "시스템컬럼명", required=True)
+        if text(system_format).upper() not in SYSTEM_COLUMN_FORMATS:
+            raise ValueError("시스템컬럼 데이터 형식을 선택하십시오.")
+        if text(increment_method).upper() not in INCREMENT_METHODS:
+            raise ValueError("증분 방식을 선택하십시오.")
+        normalize_name_array(increment_columns, "증분컬럼명", required=True)
     return {"before": current, "after": target, "runtime_method": target, "baseline_manifest_id": int(baseline_manifest_id) if baseline_manifest_id else None}
-
-
-def recovery_window(last_success_value: object, requested_end_value: object, system_work_value: object) -> dict[str, str]:
-    start = text(last_success_value)
-    end = text(requested_end_value) or text(system_work_value)
-    if not start:
-        raise ValueError("증분 복구에는 마지막 검증 성공 기준값이 필요합니다.")
-    if not end:
-        raise ValueError("증분 복구 종료 기준값이 필요합니다.")
-    if start >= end:
-        raise ValueError("증분 복구 종료 기준값은 시작 기준값보다 커야 합니다.")
-    return {"basis_start_value": start, "basis_end_value": end, "system_work_value": text(system_work_value)}

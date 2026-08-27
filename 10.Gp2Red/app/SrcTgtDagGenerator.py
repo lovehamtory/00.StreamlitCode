@@ -105,18 +105,170 @@ def meta_table(name: str) -> str:
     return METADATA_SCHEMA + "." + name
 
 def mappings(dag_run_id: str) -> list[dict[str, Any]]:
-    query = "SELECT mpg_id, prj_cd, sbj_area_cd, src_conn_id, src_sch_nm, src_tbl_nm, tgt_conn_id, tgt_sch_nm, tgt_tbl_nm, load_sts_cd, incr_basis_cd, incr_basis_col_nm, parl_mthd_cd, parl_cnd_arr, s3_stg_path, s3_rlt_path FROM " + meta_table("vw_mig_dag_tbl_mpg") + " WHERE " + MAP_FILTER_SQL + {load_filter!r} + " ORDER BY mpg_id"
+    query = "SELECT mpg_id, prj_cd, sbj_area_cd, src_conn_id, src_sch_nm, src_tbl_nm, tgt_conn_id, tgt_sch_nm, tgt_tbl_nm, load_sts_cd, sys_col_nm_arr, sys_col_fmt_cd, incr_mthd_cd, src_incr_col_nm_arr, parl_mthd_cd, parl_cnd_arr, s3_stg_path, s3_rlt_path FROM " + meta_table("vw_mig_dag_tbl_mpg") + " WHERE " + MAP_FILTER_SQL + {load_filter!r} + " ORDER BY mpg_id"
     rows = metadata_hook().get_records(query, parameters=(MAP_FILTER_VALUE,))
-    columns = ["mpg_id", "prj_cd", "sbj_area_cd", "src_conn_id", "src_sch_nm", "src_tbl_nm", "tgt_conn_id", "tgt_sch_nm", "tgt_tbl_nm", "load_sts_cd", "incr_basis_cd", "incr_basis_col_nm", "parl_mthd_cd", "parl_cnd_arr", "s3_stg_path", "s3_rlt_path"]
+    columns = ["mpg_id", "prj_cd", "sbj_area_cd", "src_conn_id", "src_sch_nm", "src_tbl_nm", "tgt_conn_id", "tgt_sch_nm", "tgt_tbl_nm", "load_sts_cd", "sys_col_nm_arr", "sys_col_fmt_cd", "incr_mthd_cd", "src_incr_col_nm_arr", "parl_mthd_cd", "parl_cnd_arr", "s3_stg_path", "s3_rlt_path"]
     return [dict(zip(columns, row)) | {{"dag_nm": DAG_ID, "dag_run_id": dag_run_id, "dag_type": DAG_TYPE}} for row in rows]
+
+def quote_identifier(value: object) -> str:
+    name = str(value or "").strip()
+    if not name or "\\x00" in name:
+        raise RuntimeError("대상 식별자를 확인하십시오.")
+    return '"' + name.replace('"', '""') + '"'
+
+def column_mappings(record: dict[str, Any]) -> list[dict[str, Any]]:
+    query = "SELECT src_col_nm, tgt_col_nm, trnsf_expr, dflt_expr FROM " + meta_table("tb_mig_col_mpg") + " WHERE mpg_id = %s AND active_yn = TRUE ORDER BY col_ord"
+    columns = ["src_col_nm", "tgt_col_nm", "trnsf_expr", "dflt_expr"]
+    return [dict(zip(columns, row)) for row in metadata_hook().get_records(query, parameters=(record["mpg_id"],))]
+
+def source_target_increment_columns(record: dict[str, Any], mappings: list[dict[str, Any]]) -> tuple[list[str], list[str]]:
+    source_keys = json.loads(record.get("src_incr_col_nm_arr") or "[]")
+    if not isinstance(source_keys, list) or not source_keys:
+        raise RuntimeError("원천 증분 컬럼명이 없습니다.")
+    by_source = {{str(row.get("src_col_nm") or "").upper(): row for row in mappings}}
+    targets: list[str] = []
+    for source_key in source_keys:
+        item = by_source.get(str(source_key).upper())
+        if not item or not str(item.get("tgt_col_nm") or "").strip():
+            raise RuntimeError("원천 증분 컬럼의 대상 컬럼매핑이 없습니다: " + str(source_key))
+        targets.append(str(item["tgt_col_nm"]))
+    return [str(value) for value in source_keys], targets
+
+def source_value(value: object, format_code: object) -> str:
+    raw = str(value or "").strip().replace("'", "''")
+    code = str(format_code or "").upper()
+    if not raw:
+        raise RuntimeError("증분 실행 기준값이 없습니다.")
+    if code == "YYYYMMDD":
+        return "'" + raw + "'"
+    if code == "YYYYMMDDHH24MISS":
+        return "TO_TIMESTAMP('" + raw + "', 'YYYYMMDDHH24MISS')"
+    if code == "DATE":
+        return "TO_DATE('" + raw + "', 'YYYY-MM-DD')"
+    if code == "TIMESTAMP":
+        return "TIMESTAMP '" + raw + "'"
+    raise RuntimeError("시스템 컬럼 데이터 형식을 확인하십시오.")
+
+def source_extract_plan(record: dict[str, Any], run_conf: dict[str, Any]) -> dict[str, Any]:
+    mappings = column_mappings(record)
+    if not mappings:
+        raise RuntimeError("원천 추출 컬럼매핑이 없습니다.")
+    source_table = quote_identifier(record["src_sch_nm"]) + "." + quote_identifier(record["src_tbl_nm"])
+    source_columns = ", ".join("S." + quote_identifier(row["src_col_nm"]) for row in mappings if str(row.get("src_col_nm") or "").strip())
+    if not source_columns:
+        raise RuntimeError("원천 컬럼매핑이 없습니다.")
+    custom_condition = str(run_conf.get("src_where_cnd") or "").strip()
+    if any(token in custom_condition for token in (";", "--", "/*", "*/")):
+        raise RuntimeError("원천 조회조건에 세미콜론 또는 SQL 주석을 입력할 수 없습니다.")
+    if str(record.get("load_sts_cd") or "").upper() == "INCR" and not custom_condition:
+        source_keys, _ = source_target_increment_columns(record, mappings)
+        system_columns = json.loads(record.get("sys_col_nm_arr") or "[]")
+        if not isinstance(system_columns, list) or not system_columns:
+            raise RuntimeError("시스템 컬럼명이 없습니다.")
+        criterion = source_value(run_conf.get("sys_ref_val"), record.get("sys_col_fmt_cd"))
+        system_predicate = " OR ".join("I." + quote_identifier(column) + " >= " + criterion for column in system_columns)
+        outer_keys = "(" + ", ".join("S." + quote_identifier(column) for column in source_keys) + ")" if len(source_keys) > 1 else "S." + quote_identifier(source_keys[0])
+        inner_keys = "(" + ", ".join("I." + quote_identifier(column) for column in source_keys) + ")" if len(source_keys) > 1 else "I." + quote_identifier(source_keys[0])
+        custom_condition = outer_keys + " IN (SELECT " + inner_keys + " FROM " + source_table + " AS I WHERE (" + system_predicate + "))"
+    record["src_base_cnd"] = custom_condition or None
+    record["src_extract_sql"] = "SELECT " + source_columns + " FROM " + source_table + " AS S"
+    return record
+
+def target_column_value(row: dict[str, Any]) -> str:
+    source_name = str(row.get("src_col_nm") or "").strip()
+    value = str(row.get("trnsf_expr") or "").strip() or "S." + quote_identifier(source_name)
+    default = str(row.get("dflt_expr") or "").strip()
+    return "COALESCE(" + value + ", " + default + ")" if default else value
+
+def target_load_plan(record: dict[str, Any]) -> dict[str, Any]:
+    mappings = column_mappings(record)
+    if not mappings:
+        raise RuntimeError("대상 적재 컬럼매핑이 없습니다.")
+    target = quote_identifier(record["tgt_sch_nm"]) + "." + quote_identifier(record["tgt_tbl_nm"])
+    stage = str(record.get("tgt_stage_tbl") or "__MIG_STAGE__")
+    target_columns = ", ".join(quote_identifier(row["tgt_col_nm"]) for row in mappings)
+    select_columns = [target_column_value(row) for row in mappings]
+    insert_sql = "INSERT INTO " + target + " (" + target_columns + ") SELECT " + ", ".join(select_columns) + " FROM " + stage + " AS S"
+    if str(record.get("load_sts_cd") or "").upper() == "FULL":
+        delete_sql = "TRUNCATE TABLE " + target
+    else:
+        source_keys, keys = source_target_increment_columns(record, mappings)
+        by_source = {{str(row.get("src_col_nm") or "").upper(): row for row in mappings}}
+        staged_keys = ", ".join(target_column_value(by_source[str(source_key).upper()]) + " AS " + quote_identifier(target_key) for source_key, target_key in zip(source_keys, keys))
+        key_columns = ", ".join(quote_identifier(key) for key in keys)
+        delete_sql = "DELETE FROM " + target + " AS T USING (SELECT DISTINCT " + staged_keys + " FROM " + stage + " AS S) AS S WHERE " + " AND ".join("T." + quote_identifier(key) + " = S." + quote_identifier(key) for key in keys)
+    record["tgt_load_sql"] = (delete_sql + ";\\n" if delete_sql else "") + insert_sql + ";"
+    record["tgt_stage_placeholder"] = "__MIG_STAGE__"
+    return record
 
 def parallel_records(records: list[dict[str, Any]]) -> list[dict[str, Any]]:
     expanded: list[dict[str, Any]] = []
     for record in records:
         conditions = json.loads(record.get("parl_cnd_arr") or "[]") if record.get("parl_mthd_cd") == "WHERE" else []
-        for condition in conditions or [None]:
-            expanded.append(dict(record) | {{"src_where_cnd": condition}})
+        for sequence, condition in enumerate(conditions or [None], start=1):
+            actual = " AND ".join("(" + item + ")" for item in (record.get("src_base_cnd"), condition) if item)
+            expanded.append(dict(record) | {{"parl_seq": sequence, "src_parl_cnd": condition, "src_where_cnd": actual or None}})
     return expanded
+
+def source_sql(record: dict[str, Any]) -> dict[str, Any]:
+    query = str(record.get("src_extract_sql") or "").strip()
+    if not query:
+        raise RuntimeError("원천 추출 SQL이 없습니다.")
+    condition = str(record.get("src_where_cnd") or "").strip()
+    record["src_extract_sql"] = query + (" WHERE " + condition if condition else "")
+    return record
+
+def write_s3_manifest(record: dict[str, Any]) -> dict[str, Any]:
+    required = ("s3_mnf_path", "s3_data_path")
+    missing = [name for name in required if not str(record.get(name) or "").strip()]
+    if missing:
+        raise RuntimeError("S3 실행기는 매니페스트 필수값을 반환해야 합니다: " + ", ".join(missing))
+    hook = metadata_hook()
+    table = meta_table("tb_mig_s3_manf")
+    key = (record["mpg_id"], DAG_ID, record["dag_run_id"], int(record.get("parl_seq") or 1))
+    existing = hook.get_first("SELECT s3_manf_id FROM " + table + " WHERE mpg_id = %s AND dag_nm = %s AND dag_run_id = %s AND parl_seq = %s ORDER BY s3_manf_id DESC LIMIT 1", parameters=key)
+    values = (record.get("s3_mnf_path"), record.get("s3_data_path"), record.get("src_row_cnt"), record.get("s3_row_cnt"), record.get("s3_byte_size"), record.get("src_where_cnd"))
+    if existing:
+        hook.run("UPDATE " + table + " SET s3_mnf_path = %s, s3_data_path = %s, src_row_cnt = %s, s3_row_cnt = %s, s3_byte_size = %s, src_where_cnd = %s, vald_sts_cd = 'PENDING', ins_sts_cd = 'PENDING', upd_dtm = GETDATE() WHERE s3_manf_id = %s", parameters=values + (existing[0],))
+        record["s3_manf_id"] = int(existing[0])
+    else:
+        hook.run("INSERT INTO " + table + " (mpg_id, dag_nm, dag_run_id, parl_seq, src_where_cnd, s3_mnf_path, s3_data_path, load_mthd_cd, src_row_cnt, s3_row_cnt, s3_byte_size) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)", parameters=key + (record.get("src_where_cnd"), record["s3_mnf_path"], record["s3_data_path"], record.get("load_sts_cd"), record.get("src_row_cnt"), record.get("s3_row_cnt"), record.get("s3_byte_size")))
+        created = hook.get_first("SELECT s3_manf_id FROM " + table + " WHERE mpg_id = %s AND dag_nm = %s AND dag_run_id = %s AND parl_seq = %s ORDER BY s3_manf_id DESC LIMIT 1", parameters=key)
+        if not created:
+            raise RuntimeError("S3 매니페스트 식별자를 확인할 수 없습니다.")
+        record["s3_manf_id"] = int(created[0])
+    return record
+
+def update_manifest_status(record: dict[str, Any], column: str, status: str) -> None:
+    identifiers = [int(value) for value in record.get("s3_manf_ids", [])] or ([int(record["s3_manf_id"])] if record.get("s3_manf_id") else [])
+    if not identifiers:
+        raise RuntimeError("S3 매니페스트 식별자가 없습니다.")
+    if column not in {{"vald_sts_cd", "ins_sts_cd"}} or status not in {{"SUCCESS", "FAILED"}}:
+        raise RuntimeError("매니페스트 상태값을 확인하십시오.")
+    placeholders = ", ".join(["%s"] * len(identifiers))
+    metadata_hook().run("UPDATE " + meta_table("tb_mig_s3_manf") + " SET " + column + " = %s, upd_dtm = GETDATE() WHERE s3_manf_id IN (" + placeholders + ")", parameters=(status, *identifiers))
+
+def source_dag_name() -> str:
+    return DAG_ID.replace("_s3_tgt", "_src_s3")
+
+def bind_source_manifests(records: list[dict[str, Any]], source_run_id: object) -> list[dict[str, Any]]:
+    run_id = str(source_run_id or "").strip()
+    if not run_id:
+        raise RuntimeError("S3→대상 DAG 실행에는 dag_run.conf.source_dag_run_id가 필요합니다.")
+    rows = metadata_hook().get_records("SELECT s3_manf_id, mpg_id, s3_mnf_path, s3_data_path, src_where_cnd FROM " + meta_table("tb_mig_s3_manf") + " WHERE dag_nm = %s AND dag_run_id = %s AND vald_sts_cd = 'SUCCESS' AND ins_sts_cd IN ('PENDING','FAILED') ORDER BY mpg_id, parl_seq", parameters=(source_dag_name(), run_id))
+    grouped: dict[int, list[dict[str, Any]]] = {{}}
+    for row in rows:
+        item = dict(zip(["s3_manf_id", "mpg_id", "s3_mnf_path", "s3_data_path", "src_where_cnd"], row))
+        grouped.setdefault(int(item["mpg_id"]), []).append(item)
+    result: list[dict[str, Any]] = []
+    for record in records:
+        manifests = grouped.get(int(record["mpg_id"]), [])
+        if not manifests:
+            continue
+        result.append(dict(record) | {{"source_dag_run_id": run_id, "s3_manifests": manifests, "s3_manf_ids": [item["s3_manf_id"] for item in manifests]}})
+    if not result:
+        raise RuntimeError("검증 완료된 S3 매니페스트가 없습니다.")
+    return result
 
 def write_log(record: dict[str, Any], step: str, status: str, message: str) -> None:
     now = datetime.now()
@@ -155,6 +307,11 @@ def migration_dag() -> None:
     @task
     def prepare(**context: Any) -> list[dict[str, Any]]:
         records = mappings(context["dag_run"].run_id)
+        run_conf = context["dag_run"].conf or {{}}
+        if DAG_TYPE in {{"FULL_SRC_S3", "INCR_SRC_S3", "RELOAD_SRC_S3", "INCR_ALL", "RELOAD_ALL", "VALD_SRC_S3"}}:
+            records = [source_extract_plan(record, run_conf) for record in records]
+        if DAG_TYPE in {"FULL_S3_TGT", "INCR_S3_TGT", "RELOAD_S3_TGT"}:
+            records = bind_source_manifests(records, run_conf.get("source_dag_run_id"))
         if not records:
             raise RuntimeError("생성 조건에 해당하는 활성 테이블매핑이 없습니다.")
         write_dag_run(context["dag_run"].run_id, "RUNNING", "DAG 시작", len(records))
@@ -166,15 +323,27 @@ def migration_dag() -> None:
 
     @task
     def run_s3(record: dict[str, Any]) -> dict[str, Any]:
-        return execute(record, "S3", "원천 S3 적재")
+        return write_s3_manifest(execute(source_sql(record), "S3", "원천 S3 적재"))
 
     @task(max_active_tis_per_dag=1)
     def run_ins(record: dict[str, Any]) -> dict[str, Any]:
-        return execute(record, "INS", "S3 대상 적재")
+        try:
+            result = execute(target_load_plan(record), "INS", "S3 대상 적재")
+            update_manifest_status(result, "ins_sts_cd", "SUCCESS")
+            return result
+        except Exception:
+            update_manifest_status(record, "ins_sts_cd", "FAILED")
+            raise
 
     @task
     def validate_src_s3(record: dict[str, Any]) -> dict[str, Any]:
-        return execute(record, "VALIDATE_SRC_S3", "원천 S3 검증")
+        try:
+            result = execute(record, "VALIDATE_SRC_S3", "원천 S3 검증")
+            update_manifest_status(result, "vald_sts_cd", "SUCCESS")
+            return result
+        except Exception:
+            update_manifest_status(record, "vald_sts_cd", "FAILED")
+            raise
 
     @task
     def validate_s3_tgt(record: dict[str, Any]) -> dict[str, Any]:

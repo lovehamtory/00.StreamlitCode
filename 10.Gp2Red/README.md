@@ -7,7 +7,7 @@
 ## 1. 업무 구조
 
 ```text
-접속정보 ── 원천 레이아웃 ── SRC·TGT 테이블/컬럼 매핑 ── 대상 반영안
+접속정보 ── 원천 레이아웃 ── SRC·TGT 테이블/컬럼 매핑 ── 대상 DDL
                                                    │
                                       주제영역별 전체 DAG 생성
                                                    │
@@ -32,7 +32,7 @@
 | 3 | 이관 관리 > 주제영역 | 상위·하위 주제영역과 사용여부 등록 | DAG 분할 단위 준비 |
 | 4 | 구조·변경 > 원천 레이아웃 | 원천 기준일·스키마 수집 | 컬럼·PK·NULL 기준본 저장 |
 | 5 | 이관 관리 > SRC·TGT 매핑 | 테이블·컬럼, 표준 대상명, 변환식, 검증 규칙 등록 | 이행 규칙 확정 |
-| 6 | 구조·변경 > 대상 반영안 | 분산키·정렬키·DDL 검토 및 저장 | DBA 검토용 DDL 준비 |
+| 6 | 구조·변경 > 대상 반영안 | 대상 DDL 조회·수정·저장·적용 | DROP·CREATE 및 COMMENT ON 실행 |
 | 7 | 이관 관리 > DAG 생성 | 주제영역 전체 또는 테이블별 DAG 생성 | `dag` 폴더 Python 파일 생성 |
 | 8 | Airflow | 파일 배포, Connection/Variable 설정, 실행 순서 결정 | 실제 이관 실행 |
 | 9 | 실행 현황·검증 | 상태·건수·오류·검증 결과 확인 | 보정 대상 식별 |
@@ -128,7 +128,7 @@ Redshift 대상 접속은 한 건만 등록합니다. 그 접속의 S3 기준경
 | --- | --- | --- |
 | 원천 레이아웃 | Greenplum 접속, 기준일, 스키마 | 원천 테이블·컬럼·PK·NULL 이력 |
 | 변경 비교 | 이전·비교 기준일 | 신규·삭제·변경 컬럼 목록 |
-| 대상 반영안 | 저장된 매핑 | 대상 분산키·정렬키·DDL 미리보기 |
+| 대상 반영안 | 저장된 매핑과 대상 접속 | 기존 DDL 조회, 물리 옵션 수정, DDL 적용 |
 
 원천 수집은 현재 Greenplum 카탈로그를 사용합니다. Oracle·MSSQL 원천은 동일한 `TB_MIG_SRC_LAYOUT` 형식으로 업로드 또는 수집 모듈을 추가한 뒤 사용합니다.
 
@@ -143,10 +143,20 @@ Redshift 대상 접속은 한 건만 등록합니다. 그 접속의 S3 기준경
 | 항목 | 코드값 | 설명 |
 | --- | --- | --- |
 | 적재 상태 | `FULL`, `INCR` | 기본 전체·증분 운영 구분 |
-| 증분 기준 | `DT`, `YMD`, `YM`, `WM_DTM`, `PK` | 증분 범위 판단 기준 |
+| 시스템 컬럼명 | JSON 문자열 배열 | 생성일시·수정일시 등 원천 추출 기준 컬럼. 배열의 컬럼은 `OR` 조건 |
+| 시스템 컬럼 형식 | `YYYYMMDD`, `YYYYMMDDHH24MISS`, `TIMESTAMP`, `DATE` | 증분 기준값 변환 형식 |
+| 증분 방식 | `PK_MERGE`, `APPEND` | PK 또는 증분컬럼 기준 `DELETE·INSERT` |
+| 원천 증분 컬럼명 | JSON 문자열 배열 | 원천의 `STD_DT` 또는 PK. 대상 컬럼은 컬럼매핑으로 자동 변환 |
 | S3 병렬 방식 | `NONE`, `WHERE` | 단일 추출 또는 WHERE 조건별 병렬 추출 |
-| 대상 분산 방식 | `AUTO`, `EVEN`, `KEY`, `ALL` | Redshift DISTSTYLE |
-| 대상 정렬 방식 | `AUTO`, `NONE`, `COMPOUND`, `INTERLEAVED` | Redshift SORTKEY |
+
+시스템 컬럼명과 증분 컬럼명은 반드시 JSON 배열로 입력합니다.
+
+```text
+["생성일시", "수정일시"]
+["PK1", "PK2"]
+```
+
+생성 DAG는 시스템 컬럼 배열을 `OR`로 연결해 영향을 받은 원천 증분키를 찾습니다. 예를 들어 `STD_DT IN (SELECT STD_DT ... WHERE 생성일시 >= 기준값 OR 변경일시 >= 기준값)`을 생성합니다. S3에는 원천 컬럼명 그대로 적재하고, 대상 적재는 컬럼매핑의 대상 컬럼명·변환식·기본값식을 사용합니다. `FULL`은 `TRUNCATE TABLE` 후 `INSERT`합니다. `PK_MERGE`와 `APPEND`는 모두 컬럼매핑으로 변환된 대상 증분키 범위를 `DELETE`한 뒤 `INSERT`합니다. SQL `MERGE` 문은 생성하지 않습니다.
 
 `WHERE` 병렬 조건은 테이블 단위 JSON 배열입니다. 조건 하나가 S3 추출 작업 하나가 되며 대상 적재는 테이블별 단일 실행입니다.
 
@@ -189,7 +199,21 @@ Redshift 대상 접속은 한 건만 등록합니다. 그 접속의 S3 기준경
 | Variable | `mig_executor_module` |
 | Python 모듈 | `run_s3`, `run_ins`, `run_validate_src_s3`, `run_validate_s3_tgt` 실행 함수 |
 
-생성 DAG는 이 네 실행 함수를 호출하는 공통 껍데기입니다. 실제 JDBC/ODBC/psycopg 추출·Parquet 생성·COPY·검증 SQL은 Airflow 실행 모듈에 구현합니다. Streamlit에서 Airflow를 직접 배포하거나 실행하지 않습니다.
+생성 DAG는 이 네 실행 함수를 호출하는 공통 껍데기입니다. `run_s3` 실행기는 `record["src_extract_sql"]`을 실행하여 원천 테이블명·원천 컬럼명 기준으로 S3에 저장하고 `s3_mnf_path`, `s3_data_path`를 반드시 반환합니다. DAG는 실제 원천 조회조건과 함께 이를 `TB_MIG_S3_MANF`에 저장하고 반환값의 `s3_manf_id`를 TaskFlow XCom으로 다음 태스크에 전달합니다. `run_ins` 호출 전 대상 테이블명·대상 컬럼명·변환식을 반영한 `DELETE·INSERT` SQL 계획을 `record["tgt_load_sql"]`에 담습니다. 실행 모듈은 원천 레이아웃 S3 데이터를 대상 스테이지에 준비한 뒤 `__MIG_STAGE__`를 실제 스테이지 테이블명으로 치환해 실행합니다. 실제 JDBC/ODBC/psycopg 추출·Parquet 생성·COPY·검증 SQL은 Airflow 실행 모듈에 구현합니다. Streamlit에서 Airflow를 직접 배포하거나 실행하지 않습니다.
+
+증분 원천 S3 DAG는 아래처럼 시스템 기준값을 실행 설정으로 받습니다. 특정 부분을 직접 재작업할 때는 `src_where_cnd`를 넣으면 시스템 기준값 대신 그 조건을 그대로 사용합니다.
+
+```json
+{"sys_ref_val": "20260101000000"}
+```
+
+별도 `S3→대상` DAG를 실행할 때는 Airflow 실행 설정에 원천 S3 DAG의 실행 ID를 넣습니다.
+
+```json
+{"source_dag_run_id": "scheduled__2026-08-27T01:00:00+00:00"}
+```
+
+대상 DAG는 이 값과 대응하는 원천 S3 DAG명으로 `TB_MIG_S3_MANF`를 조회해 검증 성공·미반영 매니페스트만 묶어 처리합니다. 최신 매니페스트를 임의 조회하지 않으므로 재실행 시 다른 회차 S3 파일을 선택하지 않습니다.
 
 ## 10. 로그·검증·산출물
 
@@ -199,16 +223,22 @@ Redshift 대상 접속은 한 건만 등록합니다. 그 접속의 S3 기준경
 | `TB_MIG_SBJ_AREA` | 주제영역 계층·표시·사용여부 |
 | `TB_MIG_SBJ_DAG_MPG` | 주제영역별 S3·대상·증분 병렬도와 일정 |
 | `TB_MIG_SRC_LAYOUT` | 원천 구조 기준일 이력 |
-| `TB_MIG_TBL_MPG`, `TB_MIG_COL_MPG` | 이행·변환·물리·검증 규칙 |
+| `TB_MIG_TBL_MPG`, `TB_MIG_COL_MPG` | 이행·변환·증분·검증 규칙과 대상 설명 |
 | `TB_MIG_MPG_CHG_HIST` | 매핑 버전·변경이력 |
-| `TB_MIG_S3_MANF` | S3 Parquet 기준본·검증·대상반영 상태 |
+| `TB_MIG_S3_MANF` | 테이블·실행회차·병렬분할별 S3 Parquet 기준본, 실제 원천 조회조건, 검증·대상반영 상태 |
 | `TB_MIG_DAG_RUN` | DAG별 전체·완료·진행·오류 건수와 진행률 |
 | `TB_MIG_RUN_LOG` | 테이블별 S3·INS·검증 작업 로그 |
 | `TB_MIG_VALD_RSLT`, `TB_MIG_VALD_COL_RSLT` | COUNT·SUM·HASH 검증 결과 |
 | `TB_MIG_TBL_LOAD_HIST` | 기본 적재상태 전환 이력 |
 | `TB_MIG_ARTF_ITEM` | Excel 산출물 항목·순서·출력여부 |
 
-`실행 현황`은 30초마다 DAG별·테이블별 로그를 재조회해 전체/완료/진행중/오류 카드와 진행률을 표시합니다. 고객 제공 현황 화면이 필요하면 메타 DB에 읽기 전용 권한만 준 별도 Streamlit 배포본을 사용합니다.
+`실행 현황`은 5초마다 DAG별·테이블별 로그를 재조회해 전체/완료/진행중/오류 카드와 진행률을 표시합니다. 고객 제공 현황 화면이 필요하면 메타 DB에 읽기 전용 권한만 준 별도 Streamlit 배포본을 사용합니다.
+
+## 10.1 대상 DDL과 설명
+
+대상 DDL 화면은 테이블 매핑과 분리되어 있습니다. `대상 DDL 조회`를 누르면 등록된 대상 접속으로 `SHOW TABLE`을 실행해 분산·정렬·자동압축 설정을 읽습니다. 대상 테이블이 없거나 조회하지 않은 경우에는 `AUTO`, `AUTO`, 자동압축 해제로 시작합니다. 화면에서 분산·정렬·압축을 변경하면 `DROP TABLE IF EXISTS`, `CREATE TABLE`, 테이블·컬럼 `COMMENT ON` 문을 포함한 실행 DDL이 생성됩니다.
+
+`대상 적용`은 실제 대상 접속에서 DDL을 실행합니다. `DROP TABLE 실행 확인`을 반드시 선택해야 하며, 대상 테이블 데이터는 삭제될 수 있습니다. 대상 테이블·컬럼 설명은 매핑에 저장하고, 한글과 줄바꿈은 UTF-8 및 표준 SQL 문자열로 보존합니다. Oracle 전용 `q'[]'` 문법은 Redshift에 사용하지 않습니다.
 
 `산출물`은 테이블정의서, 컬럼정의서, 매핑정의서, 단위테스트결과서, 통합테스트결과서, 검증결과서를 각각 한 Excel 파일·한 시트로 생성합니다. 첫 행 고정, 굵게, 노란색 배경, 맑은 고딕 10포인트를 적용합니다.
 

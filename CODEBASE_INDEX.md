@@ -10,17 +10,17 @@ SRC → S3 → TGT 이관을 위한 Streamlit 메타 관리·DAG 생성 도구�
 | `10.Gp2Red/app/SrcTgtInitialize.py` | 클릭형 메타 초기 설정 화면 |
 | `10.Gp2Red/app/SrcTgtControl.py` | 접속·주제영역·매핑·DAG·검증·로그·산출물 통합 화면 |
 | `10.Gp2Red/app/SrcTgtLayoutHistory.py` | 원천 구조 수집·변경 비교·대상 반영안 화면 |
-| `10.Gp2Red/app/SrcTgtDagGenerator.py` | 주제영역 FULL·검증, 테이블 INCR·재적재 DAG 생성 |
-| `10.Gp2Red/app/SrcTgtMapping.py` | 테이블·컬럼 매핑 및 Excel 일괄 업로드 |
+| `10.Gp2Red/app/SrcTgtDagGenerator.py` | 주제영역 FULL·검증, 테이블 INCR·재적재 DAG, 원천 조회 SQL·S3 매니페스트/XCom·대상 컬럼매핑 DELETE·INSERT SQL 계획 생성 |
+| `10.Gp2Red/app/SrcTgtMapping.py` | 테이블·컬럼 매핑, 시스템컬럼 증분 규칙, 대상 설명 및 Excel 일괄 업로드 |
 | `10.Gp2Red/app/SrcTgtMonitor.py` | DAG·테이블 실행 현황 화면 |
 | `10.Gp2Red/app/SrcTgtArtifact.py` | Excel 산출물 및 레이아웃 정의 |
 | `10.Gp2Red/app/SrcTgtSnapshotRestore.py` | Redshift 스냅샷 복구 |
 | `10.Gp2Red/app/SrcTgtConnection.py` | 접속정보 관리 |
 | `10.Gp2Red/app/SrcTgtDataType.py` | 원천 타입의 Redshift 표준 타입 변환 |
-| `10.Gp2Red/app/SrcTgtLoadState.py` | FULL·INCR 상태와 WHERE 병렬 입력 검증 |
+| `10.Gp2Red/app/SrcTgtLoadState.py` | FULL·INCR 상태, 시스템 컬럼 배열·증분 방식, WHERE 병렬 입력 검증 |
 | `10.Gp2Red/app/SrcTgtRuntime.py` | 메타 DB 공통 접속·식별자 함수 |
 | `10.Gp2Red/app/SrcTgtSetup.py` | 메타 스키마 백업·DDL 실행 |
-| `10.Gp2Red/app/SrcTgtTargetReflection.py` | 대상 물리 반영안·DDL 생성 |
+| `10.Gp2Red/app/SrcTgtTargetReflection.py` | 대상 DDL 조회·물리 옵션 편집·DROP/CREATE/COMMENT 적용 |
 | `10.Gp2Red/app/SrcTgtValidation.py` | 검증 결과 조회 |
 | `10.Gp2Red/dag/common/mig_step_runtime.py` | Airflow 실행기 공통 호출 함수 |
 | `10.Gp2Red/sql/01_mig_metadata_ddl.sql` | Redshift 이관 메타 DDL |
