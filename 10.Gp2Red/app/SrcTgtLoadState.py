@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from typing import Any
 
 
@@ -34,10 +35,19 @@ def normalize_parallel(method: object, condition_array: object) -> dict[str, Any
 
 
 def normalize_name_array(value: object, field_name: str, required: bool = False) -> list[str]:
-    try:
-        raw = value if isinstance(value, list) else json.loads(text(value) or "[]")
-    except json.JSONDecodeError as error:
-        raise ValueError(f"{field_name}은 JSON 문자열 배열이어야 합니다.") from error
+    if isinstance(value, list):
+        raw = value
+    else:
+        raw_text = text(value)
+        if not raw_text:
+            raw = []
+        elif raw_text.startswith("["):
+            try:
+                raw = json.loads(raw_text)
+            except json.JSONDecodeError as error:
+                raise ValueError(f"{field_name} 배열 형식을 확인하십시오.") from error
+        else:
+            raw = re.split(r"[\s,]+", raw_text)
     if not isinstance(raw, list) or any(not text(item) for item in raw):
         raise ValueError(f"{field_name}은 비어 있지 않은 JSON 문자열 배열이어야 합니다.")
     result = [text(item) for item in raw]
