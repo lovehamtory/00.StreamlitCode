@@ -17,7 +17,7 @@ except ImportError:
 
 PROJECT_ROOT = Path(__file__).parent.parent
 SCHEMA_CONFIG = PROJECT_ROOT.parent / ".streamlit" / "migration_setup.toml"
-REQUIRED_TABLES = {"tb_mig_conn", "tb_mig_airflow", "tb_mig_emr", "tb_mig_sbj_area", "tb_mig_sbj_dag_mpg", "tb_mig_dag_dply_hist", "tb_mig_emr_run", "tb_mig_src_layout", "tb_mig_tbl_mpg", "tb_mig_col_mpg", "tb_mig_mpg_chg_hist", "tb_mig_s3_manf", "tb_mig_dag_run", "tb_mig_run_log", "tb_mig_vald_rslt", "tb_mig_vald_col_rslt", "tb_mig_tbl_load_hist", "tb_mig_artf_item"}
+REQUIRED_TABLES = {"tb_mig_usr", "tb_mig_auth_grp", "tb_mig_menu_auth", "tb_mig_usr_auth", "tb_mig_conn", "tb_mig_airflow", "tb_mig_emr", "tb_mig_sbj_area", "tb_mig_sbj_dag_mpg", "tb_mig_dag_dply_hist", "tb_mig_emr_run", "tb_mig_src_layout", "tb_mig_tbl_mpg", "tb_mig_col_mpg", "tb_mig_mpg_chg_hist", "tb_mig_s3_manf", "tb_mig_dag_run", "tb_mig_run_log", "tb_mig_vald_rslt", "tb_mig_vald_col_rslt", "tb_mig_tbl_load_hist", "tb_mig_artf_item"}
 
 
 def text(value: object) -> str:
@@ -42,16 +42,20 @@ def saved_schema() -> str:
 
 
 def configured_schema() -> str:
-    settings = dict(st.secrets.get("migration_metadata", {}))
-    return text(settings.get("schema")).lower() or saved_schema()
+    return saved_schema()
 
 
 def connection_values() -> dict[str, Any]:
-    settings = dict(st.secrets.get("migration_metadata", {}))
+    try:
+        settings = dict(st.secrets.get("migration_metadata", {}))
+        secret_sections = st.secrets
+    except Exception:
+        settings = {}
+        secret_sections = {}
     section = text(settings.get("connection_section")) or "redshift_sql"
-    if section not in st.secrets:
+    if section not in secret_sections:
         raise ValueError("초기 설정용 Redshift 연결 설정이 없습니다.")
-    values = dict(st.secrets[section])
+    values = dict(secret_sections[section])
     required = ("host", "port", "database", "user", "password")
     if [key for key in required if not text(values.get(key))]:
         raise ValueError("초기 설정용 Redshift 연결 필수 항목이 없습니다.")
@@ -132,12 +136,16 @@ def render_initial_setup() -> None:
         submitted = st.button("메타 생성", type="primary", icon=":material/play_circle:", width="stretch")
     if backed_up:
         try:
+            from SrcTgtSecurity import require_save
+            require_save("INIT")
             count = backup_metadata(connection_values(), schema_name(value), pd.Timestamp.now().strftime("%Y%m%d"))
             st.success(f"메타 테이블 {count:,}건을 오늘자 CTAS 백업으로 생성했습니다.", icon=":material/check_circle:")
         except Exception as error:
             st.error(f"메타데이터 백업 실패: {error}", icon=":material/error:")
     if submitted:
         try:
+            from SrcTgtSecurity import require_save
+            require_save("INIT")
             initialize(connection_values(), schema_name(value))
             st.success("메타데이터를 생성했습니다. 이관 관리로 계속하십시오.", icon=":material/check_circle:")
             st.rerun()

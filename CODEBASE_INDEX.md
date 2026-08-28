@@ -6,9 +6,12 @@ SRC → S3 → TGT 이관을 위한 Streamlit 메타 관리·DAG 생성·Airflow
 
 | 경로 | 역할 |
 | --- | --- |
-| `10.Gp2Red/app/SrcTgtOrchestrator.py` | 업무 흐름 순서의 좌측 트리 메뉴·하단 작성자 표기가 있는 Streamlit 메뉴 진입점 |
+| `10.Gp2Red/app/SrcTgtOrchestrator.py` | 로그인·최초 비밀번호 변경·메뉴 권한으로 동적 좌측 트리를 구성하는 Streamlit 메뉴 진입점 |
 | `10.Gp2Red/app/SrcTgtInitialize.py` | 클릭형 메타 초기 설정 화면 |
 | `10.Gp2Red/app/SrcTgtReference.py` | 접속정보 관리 화면 |
+| `10.Gp2Red/app/SrcTgtSecurity.py` | PBKDF2 비밀번호 해시, 초기 관리자 인증, 사용자·권한그룹·메뉴권한 공통 모듈 |
+| `10.Gp2Red/app/SrcTgtUserManagement.py` | 사용자·유효기간·권한그룹 지정 화면 |
+| `10.Gp2Red/app/SrcTgtPermissionManagement.py` | 메뉴별 조회·저장 권한그룹 관리 화면 |
 | `10.Gp2Red/app/SrcTgtSubjectArea.py` | 주제영역 계층·접속정보 저장 및 조회 공통 모듈 |
 | `10.Gp2Red/app/SrcTgtSubjectAreaManagement.py` | 주제영역 관리 화면 |
 | `10.Gp2Red/app/SrcTgtTableMap.py` | 테이블매핑 조회 공통 모듈 |
@@ -38,7 +41,7 @@ SRC → S3 → TGT 이관을 위한 Streamlit 메타 관리·DAG 생성·Airflow
 | `10.Gp2Red/app/SrcTgtValidation.py` | 검증 결과 조회 |
 | `10.Gp2Red/dag/common/mig_step_runtime.py` | Airflow 실행기 공통 호출 함수 |
 | `10.Gp2Red/dag/common/mig_emr_runtime.py` | Airflow AWS Connection을 사용하는 전용 EMR 종료 함수 |
-| `10.Gp2Red/sql/01_mig_metadata_ddl.sql` | 접속·Airflow·EMR·DAG배포·실행·검증을 정의하는 Redshift 이관 메타 DDL |
+| `10.Gp2Red/sql/01_mig_metadata_ddl.sql` | 사용자·권한·접속·Airflow·EMR·DAG배포·실행·검증을 정의하는 Redshift 이관 메타 DDL |
 | `10.Gp2Red/tests/virtual_workflow_test.py` | 문법·메타·DAG·실패차단 가상 검증 |
 | `10.Gp2Red/README.md` | 운영자 매뉴얼 |
 
@@ -47,6 +50,6 @@ SRC → S3 → TGT 이관을 위한 Streamlit 메타 관리·DAG 생성·Airflow
 - 실제 자격증명은 `.streamlit/secrets.toml`과 Airflow에만 둡니다.
 - DAG 배포는 Airflow REST API가 아닌 공유 DAG 경로 또는 배포 에이전트로 수행한 뒤 Airflow API로 paused 상태를 등록합니다.
 - EMR 자동 종료는 전용 EMR의 ALL DAG 종료 단계에서만 수행합니다.
-- 화면 메뉴는 `접속정보 → 주제영역 → 테이블 레이아웃 → 대상 DDL → SRC·TGT 매핑 → DAG 생성 → 실행 현황 → 테이블 변경 비교 → 검증 → 실행 이력 → EMR → 스냅샷 복구 → 산출물 → 초기 설정` 순서로 항상 모두 표시합니다. 테이블 레이아웃은 선택한 원천 테이블을 가진 매핑 신규·수정으로 이동하고, 매핑은 해당 원천 테이블·대상 DDL·DAG 생성으로, 테이블별 DAG은 해당 매핑으로 이동합니다. 제목은 탭보다 한 단계 큰 소제목 크기로 통일합니다.
+- 메타 생성 전에는 초기 관리자 인증 후 `초기 설정`만 표시합니다. 메타 생성 후에는 사용자·권한그룹의 메뉴별 조회 권한으로 메뉴를 표시하고, 초기 관리자와 신규 사용자는 비밀번호 변경 후 진입합니다. 접속정보는 원천·대상 DB/S3 접속정보를 관리하며 시스템 기동용 메타 DB 연결은 초기 설정에서 준비합니다. 테이블 레이아웃은 선택한 원천 테이블을 가진 매핑 신규·수정으로 이동하고, 매핑은 해당 원천 테이블·대상 DDL·DAG 생성으로, 테이블별 DAG은 해당 매핑으로 이동합니다. 제목은 탭보다 한 단계 큰 소제목 크기로 통일합니다.
 - 생성 DAG는 `10.Gp2Red/dag`에 유지합니다.
 - 상위주제영역은 분류·모니터링 단위이고 하위 주제영역은 접속정보·DAG 분할 단위이며 영역 간 오케스트레이션은 생성하지 않습니다.

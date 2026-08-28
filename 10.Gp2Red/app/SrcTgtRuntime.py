@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 import sys
 from typing import Any
 
@@ -19,6 +20,62 @@ except ImportError:
 class RuntimeContext:
     values: dict[str, Any]
     schema_name: str
+
+
+WRITE_SQL_PATTERN = re.compile(r"^\s*(?:INSERT|UPDATE|DELETE|MERGE|CREATE|ALTER|DROP|TRUNCATE|COPY|GRANT|REVOKE|COMMENT)\b", re.IGNORECASE)
+
+
+def ensure_write_allowed(statement: object) -> None:
+    if not WRITE_SQL_PATTERN.match(str(statement)):
+        return
+    user = st.session_state.get("mig_authenticated_user")
+    menu_code = text(st.session_state.get("mig_active_menu"))
+    if not isinstance(user, dict) or not menu_code:
+        return
+    permissions = user.get("permissions", {}).get(menu_code, {})
+    if not bool(permissions.get("save", False)):
+        raise PermissionError("이 메뉴의 저장 권한이 없습니다.")
+
+
+class GuardedCursor:
+    def __init__(self, cursor: Any) -> None:
+        self.cursor = cursor
+
+    def __enter__(self) -> GuardedCursor:
+        self.cursor.__enter__()
+        return self
+
+    def __exit__(self, *args: object) -> object:
+        return self.cursor.__exit__(*args)
+
+    def execute(self, statement: object, *args: object, **kwargs: object) -> Any:
+        ensure_write_allowed(statement)
+        return self.cursor.execute(statement, *args, **kwargs)
+
+    def executemany(self, statement: object, *args: object, **kwargs: object) -> Any:
+        ensure_write_allowed(statement)
+        return self.cursor.executemany(statement, *args, **kwargs)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.cursor, name)
+
+
+class GuardedConnection:
+    def __init__(self, connection: Any) -> None:
+        self.connection = connection
+
+    def __enter__(self) -> GuardedConnection:
+        self.connection.__enter__()
+        return self
+
+    def __exit__(self, *args: object) -> object:
+        return self.connection.__exit__(*args)
+
+    def cursor(self, *args: object, **kwargs: object) -> GuardedCursor:
+        return GuardedCursor(self.connection.cursor(*args, **kwargs))
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self.connection, name)
 
 
 def text(value: object) -> str:
@@ -46,7 +103,7 @@ def connect(values: dict[str, Any]) -> Any:
     }
     if text(values.get("sslmode")):
         arguments["sslmode"] = text(values["sslmode"])
-    return psycopg.connect(**arguments)
+    return GuardedConnection(psycopg.connect(**arguments))
 
 
 def query_frame(values: dict[str, Any], query: str, parameters: tuple[Any, ...] = ()) -> pd.DataFrame:

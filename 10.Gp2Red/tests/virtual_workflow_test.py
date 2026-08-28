@@ -24,6 +24,7 @@ import SrcTgtDagGenerator as dag_generator
 import SrcTgtDataType as data_type
 import SrcTgtLoadState as load_state
 import SrcTgtMapping as mapping
+import SrcTgtSecurity as security
 import SrcTgtSetup as setup
 import SrcTgtTargetReflection as target_reflection
 from common.mig_emr_runtime import terminate_profile
@@ -36,12 +37,14 @@ class VirtualWorkflowTest(unittest.TestCase):
         subject_block = ddl.split("CREATE TABLE MIG_META.TB_MIG_SBJ_AREA", 1)[1].split("CREATE TABLE MIG_META.TB_MIG_SBJ_DAG_MPG", 1)[0]
         table_block = ddl.split("CREATE TABLE MIG_META.TB_MIG_TBL_MPG", 1)[1].split("CREATE TABLE MIG_META.TB_MIG_COL_MPG", 1)[0]
         column_block = ddl.split("CREATE TABLE MIG_META.TB_MIG_COL_MPG", 1)[1].split("CREATE TABLE MIG_META.TB_MIG_MPG_CHG_HIST", 1)[0]
-        for name in ("TB_MIG_CONN", "TB_MIG_AIRFLOW", "TB_MIG_EMR", "TB_MIG_SBJ_AREA", "TB_MIG_SBJ_DAG_MPG", "TB_MIG_DAG_DPLY_HIST", "TB_MIG_EMR_RUN", "TB_MIG_SRC_LAYOUT", "TB_MIG_TBL_MPG", "TB_MIG_COL_MPG", "TB_MIG_MPG_CHG_HIST", "TB_MIG_S3_MANF", "TB_MIG_DAG_RUN", "TB_MIG_RUN_LOG", "TB_MIG_VALD_RSLT", "TB_MIG_VALD_COL_RSLT", "TB_MIG_TBL_LOAD_HIST", "TB_MIG_ARTF_ITEM"):
+        for name in ("TB_MIG_USR", "TB_MIG_AUTH_GRP", "TB_MIG_MENU_AUTH", "TB_MIG_USR_AUTH", "TB_MIG_CONN", "TB_MIG_AIRFLOW", "TB_MIG_EMR", "TB_MIG_SBJ_AREA", "TB_MIG_SBJ_DAG_MPG", "TB_MIG_DAG_DPLY_HIST", "TB_MIG_EMR_RUN", "TB_MIG_SRC_LAYOUT", "TB_MIG_TBL_MPG", "TB_MIG_COL_MPG", "TB_MIG_MPG_CHG_HIST", "TB_MIG_S3_MANF", "TB_MIG_DAG_RUN", "TB_MIG_RUN_LOG", "TB_MIG_VALD_RSLT", "TB_MIG_VALD_COL_RSLT", "TB_MIG_TBL_LOAD_HIST", "TB_MIG_ARTF_ITEM"):
             self.assertIn(name, ddl)
         self.assertNotIn("CREATE TABLE MIG_META.TB_MIG_SBJ_DEP", ddl)
         self.assertNotIn("CREATE TABLE MIG_META.TB_MIG_TBL_DEP", ddl)
         self.assertNotIn("CREATE TABLE MIG_META.TB_MIG_ONCE_WRK", ddl)
-        self.assertNotIn("TB_MIG_USR", ddl)
+        self.assertIn("PWD_HSH", ddl)
+        self.assertIn("PWD_CHG_YN", ddl)
+        self.assertIn("TB_MIG_MENU_AUTH", ddl)
         self.assertNotIn("DROP SCHEMA", ddl)
         self.assertNotIn("TGT_DIST_STYLE", ddl)
         self.assertNotIn("TGT_SORT_STYLE", ddl)
@@ -76,10 +79,21 @@ class VirtualWorkflowTest(unittest.TestCase):
         self.assertIn("tb_mig_airflow", setup.REQUIRED_TABLES)
         self.assertIn("tb_mig_emr", setup.REQUIRED_TABLES)
         self.assertIn("tb_mig_src_layout", setup.REQUIRED_TABLES)
+        self.assertIn("tb_mig_usr", setup.REQUIRED_TABLES)
+        self.assertIn("tb_mig_menu_auth", setup.REQUIRED_TABLES)
         self.assertNotIn("tb_mig_sbj_dep", setup.REQUIRED_TABLES)
         self.assertEqual(setup.schema_name("migration_meta"), "migration_meta")
         with self.assertRaises(ValueError):
             setup.schema_name("migration-meta")
+
+    def test_password_and_bootstrap_contract(self) -> None:
+        encoded = security.password_hash("migration-password")
+        self.assertTrue(security.verify_password("migration-password", encoded))
+        self.assertFalse(security.verify_password("different-password", encoded))
+        self.assertIsNotNone(security.bootstrap_authenticate("admin", "admin"))
+        self.assertIsNone(security.bootstrap_authenticate("admin", "invalid"))
+        with self.assertRaises(ValueError):
+            security.password_hash("short")
 
     def test_mapping_and_type_contract(self) -> None:
         row = mapping.defaults({"PRJ_CD": "PRJ1", "SBJ_AREA_CD": "A010001", "SRC_SCH_NM": "SRC", "SRC_TBL_NM": "고객", "TGT_SCH_NM": "DWH", "TGT_TBL_NM": "DIM_CUSTOMER"})
@@ -338,16 +352,20 @@ class VirtualWorkflowTest(unittest.TestCase):
         self.assertIn('st.switch_page("SrcTgtTargetDdl.py"', mapping_source := (PROJECT_ROOT / "app" / "SrcTgtMapping.py").read_text(encoding="utf-8"))
         self.assertNotIn("프로젝트 오케스트레이터", control)
         self.assertIn('"기준정보"', orchestration)
-        self.assertIn('title="테이블 레이아웃"', orchestration)
-        self.assertIn('title="SRC·TGT 매핑"', orchestration)
-        self.assertIn('title="DAG 생성"', orchestration)
-        self.assertIn('title="초기 설정"', orchestration)
-        self.assertIn('title="실행 현황"', orchestration)
+        self.assertIn('"테이블 레이아웃"', orchestration)
+        self.assertIn('"SRC·TGT 매핑"', orchestration)
+        self.assertIn('"DAG 생성"', orchestration)
+        self.assertIn('"초기 설정"', orchestration)
+        self.assertIn('"실행 현황"', orchestration)
+        self.assertIn('"사용자 관리"', orchestration)
+        self.assertIn('"권한 관리"', orchestration)
         self.assertTrue((PROJECT_ROOT / "app" / "SrcTgtInitialize.py").exists())
         self.assertTrue((PROJECT_ROOT / "app" / "SrcTgtReference.py").exists())
         self.assertTrue((PROJECT_ROOT / "app" / "SrcTgtDagManagement.py").exists())
         self.assertTrue((PROJECT_ROOT / "app" / "SrcTgtValidationManagement.py").exists())
         self.assertTrue((PROJECT_ROOT / "app" / "SrcTgtArtifactManagement.py").exists())
+        self.assertTrue((PROJECT_ROOT / "app" / "SrcTgtUserManagement.py").exists())
+        self.assertTrue((PROJECT_ROOT / "app" / "SrcTgtPermissionManagement.py").exists())
         self.assertIn('"S3 이관 SQL", "INS 이행 SQL"', mapping_source)
         self.assertNotIn('mapping_tab, sql_tab, transition_tab, upload_tab', mapping_source)
         self.assertIn("restore_sql_history", mapping_source)
