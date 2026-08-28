@@ -1,0 +1,7 @@
+streamlit
+oracledb
+boto3
+pandas
+pyodbc
+openpyxl
+psycopg[binary]

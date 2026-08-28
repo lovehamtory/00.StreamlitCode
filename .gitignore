@@ -7,3 +7,7 @@ __pycache__/
 .cache/
 tmp/
 generated-image.png
+10.Gp2Red/setup/build/
+10.Gp2Red/setup/dist/
+10.Gp2Red/setup/__pycache__/
+10.Gp2Red/setup/wheels/

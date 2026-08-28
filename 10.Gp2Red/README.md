@@ -4,17 +4,21 @@ Streamlit은 메타 관리, SQL·DAG 생성, Airflow 배포, 운영 조회와 �
 
 ## 설치
 
-Python 코드와 설치 파일은 분리해 배포합니다. `setup` 폴더를 포함한 프로젝트 폴더에서 PowerShell을 열고 아래 한 줄을 실행합니다.
+Python 코드와 설치 파일은 분리해 배포합니다. `setup\\MigSetup.exe`를 더블클릭합니다.
+
+`MigSetup.exe`는 Python 확인·설치, 가상환경 생성, 필수 라이브러리 설치, 실행 위치의 `app/.streamlit/secrets.toml` 생성을 처리합니다. 설치 중 창을 닫지 않습니다. 인터넷 설치에서 라이브러리 내려받기가 실패하면 서버에 복사한 `whl` 폴더를 선택해 오프라인 설치를 다시 시도합니다.
+
+Python 설치 직후 설치가 중단되면 `MigSetup.exe`를 한 번 더 실행합니다.
+
+### 인터넷 없는 서버 설치
+
+인터넷 연결 PC에서 다음을 한 번 실행해 `whl` 모듈 폴더를 만듭니다.
 
 ```powershell
-.\setup\install.ps1
+.\setup\download_offline_modules.ps1 -Destination D:\mig_wheels
 ```
 
-`setup/install.ps1`은 Python 확인·설치, 가상환경 생성, 필수 라이브러리 설치, 실행 위치의 `app/.streamlit/secrets.toml` 생성까지 처리합니다. VDI 정책으로 스크립트 실행이 막히면 아래 명령 후 다시 실행합니다.
-
-```powershell
-Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
-```
+`D:\mig_wheels` 폴더와 프로젝트 폴더를 서버로 복사한 뒤 `MigSetup.exe`를 실행합니다. 인터넷 설치가 실패하면 복사한 `whl` 폴더를 선택합니다. 설치 파일은 인터넷에 연결하지 않고 해당 폴더의 모듈만 설치합니다.
 
 ### 메타 DB 연결 설정
 
