@@ -4,7 +4,7 @@ Streamlit은 메타 관리, SQL·DAG 생성, Airflow 배포, 운영 조회와 �
 
 ## 설치
 
-Python 코드와 설치 파일은 분리해 배포합니다. `setup\\MigSetup.exe`를 더블클릭합니다.
+`setup\\MigSetup.exe`를 더블클릭한 뒤 솔루션 설치 폴더를 선택합니다. 선택한 폴더는 비어 있어야 하며, 설치 파일이 이관 솔루션 전체를 복사한 뒤 해당 위치에 Python·가상환경·필수 라이브러리를 준비합니다.
 
 `MigSetup.exe`는 Python 확인·설치, 가상환경 생성, 필수 라이브러리 설치, 실행 위치의 `app/.streamlit/secrets.toml` 생성을 처리합니다. 설치 중 창을 닫지 않습니다. 인터넷 설치에서 라이브러리 내려받기가 실패하면 서버에 복사한 `whl` 폴더를 선택해 오프라인 설치를 다시 시도합니다.
 
@@ -18,7 +18,7 @@ Python 설치 직후 설치가 중단되면 `MigSetup.exe`를 한 번 더 실행
 .\setup\download_offline_modules.ps1 -Destination D:\mig_wheels
 ```
 
-`D:\mig_wheels` 폴더와 프로젝트 폴더를 서버로 복사한 뒤 `MigSetup.exe`를 실행합니다. 인터넷 설치가 실패하면 복사한 `whl` 폴더를 선택합니다. 설치 파일은 인터넷에 연결하지 않고 해당 폴더의 모듈만 설치합니다.
+`D:\mig_wheels` 폴더와 `MigSetup.exe`를 서버로 복사한 뒤 실행합니다. 인터넷 설치가 실패하면 복사한 `whl` 폴더를 선택합니다. 설치 파일은 인터넷에 연결하지 않고 해당 폴더의 모듈만 설치합니다.
 
 ### 메타 DB 연결 설정
 

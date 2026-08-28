@@ -46,7 +46,7 @@ SRC → S3 → TGT 이관을 위한 Streamlit 메타 관리·DAG 생성·Airflow
 | `10.Gp2Red/README.md` | 운영자 매뉴얼 |
 | `10.Gp2Red/setup/install.ps1` | Python·가상환경·라이브러리·실행 위치 secrets 파일을 준비하는 설치 스크립트 |
 | `10.Gp2Red/setup/MigSetup.py` | 배포용 MigSetup.exe를 재생성하는 Windows 설치 실행파일 원본 |
-| `10.Gp2Red/setup/MigSetup.exe` | 더블클릭으로 Python·가상환경·라이브러리·로컬 접속정보 양식을 준비하는 배포용 설치 실행파일 |
+| `10.Gp2Red/setup/MigSetup.exe` | 더블클릭으로 선택한 빈 설치 폴더에 이관 솔루션을 복사하고 Python·가상환경·라이브러리·로컬 접속정보 양식을 준비하는 배포용 설치 실행파일 |
 | `10.Gp2Red/setup/download_offline_modules.ps1` | 인터넷 연결 PC에서 오프라인 설치용 wheel 모듈 폴더를 준비하는 스크립트 |
 | `10.Gp2Red/setup/run.ps1` | 현재 프로젝트 폴더 기준 Orchestrator 실행 스크립트 |
 | `10.Gp2Red/setup/secrets.toml` | 설치 스크립트가 실행 위치로 복사하는 빈 접속정보 양식 |
