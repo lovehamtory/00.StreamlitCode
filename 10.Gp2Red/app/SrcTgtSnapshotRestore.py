@@ -1113,10 +1113,10 @@ with st.container(border=True):
     if target_access_error:
         st.error(f"{selected_database['label']} 접근 확인 실패: {target_access_error}", icon=":material/error:")
 
-st.title("🧰 Redshift 스냅샷 복구")
+st.subheader(":material/restore_page: Redshift 스냅샷 복구")
 
 with st.container(border=True):
-    st.subheader("1. 스냅샷 선택", anchor=False)
+    st.caption("1. 스냅샷 선택")
     snapshot_type_label = st.segmented_control(
         "스냅샷 유형",
         options=list(SNAPSHOT_TYPES),
@@ -1151,7 +1151,7 @@ with st.container(border=True):
         snapshot_identifier = str(selected_snapshot.get("SnapshotIdentifier", ""))
 
 with st.container(border=True):
-    st.subheader("2. 복구 테이블 입력", anchor=False)
+    st.caption("2. 복구 테이블 입력")
     restore_mode_label = st.segmented_control(
         "복구 방식",
         options=list(RESTORE_MODES),
@@ -1188,7 +1188,7 @@ if restore_mode == "replace":
     )
     drop_preflight_ready = st.session_state.drop_preflight.get("key") == drop_preflight_key
 with st.container(border=True):
-    st.subheader("3. 실행 전 검증 및 복구", anchor=False)
+    st.caption("3. 실행 전 검증 및 복구")
     if validation_errors:
         for message in validation_errors:
             st.warning(message, icon=":material/warning:")

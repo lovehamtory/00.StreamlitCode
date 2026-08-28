@@ -573,7 +573,9 @@ def render_dag_generator(areas: pd.DataFrame, maps: pd.DataFrame, values: dict[s
     if areas.empty:
         st.info("주제영역을 먼저 등록하십시오.", icon=":material/info:")
         return
-    selected_area = st.selectbox("주제영역", areas.sbj_area_cd.tolist(), format_func=lambda item: f"{item} · {text(areas.loc[areas.sbj_area_cd.eq(item)].iloc[0].sbj_area_nm) or '미정'}")
+    area_options = areas.sbj_area_cd.tolist()
+    requested_area = text(st.query_params.get("sbj_area_cd")).upper()
+    selected_area = st.selectbox("주제영역", area_options, index=area_options.index(requested_area) if requested_area in area_options else 0, format_func=lambda item: f"{item} · {text(areas.loc[areas.sbj_area_cd.eq(item)].iloc[0].sbj_area_nm) or '미정'}")
     current = areas.loc[areas.sbj_area_cd.eq(selected_area)].iloc[0]
     try:
         settings_frame = setting_rows(areas, values, schema_name, query_frame, qualified)
@@ -597,7 +599,7 @@ def render_dag_generator(areas: pd.DataFrame, maps: pd.DataFrame, values: dict[s
             ins_maximum = st.number_input("대상 적재 최대 병렬", min_value=1, value=int(saved.ins_maximum))
         options = list(SCHEDULES)
         incr_schedule = st.selectbox("증분 S3 일정", options, index=options.index(text(saved.incr_schedule).upper()) if text(saved.incr_schedule).upper() in options else 0)
-        airflow_id = st.selectbox("Airflow", airflow_options, index=airflow_options.index(airflow_current) if airflow_current in airflow_options else 0, format_func=lambda value: "선택" if not value else f"{value} · {text(airflows.loc[airflows.airflow_id.eq(value)].iloc[0].airflow_nm)}")
+        airflow_id = st.selectbox("DAG 배포환경", airflow_options, index=airflow_options.index(airflow_current) if airflow_current in airflow_options else 0, format_func=lambda value: "선택" if not value else f"{value} · {text(airflows.loc[airflows.airflow_id.eq(value)].iloc[0].airflow_nm)}")
         emr_id = st.selectbox("EMR", emr_options, index=emr_options.index(emr_current) if emr_current in emr_options else 0, format_func=lambda value: "사용 안 함" if not value else f"{value} · {text(emrs.loc[emrs.emr_id.eq(value)].iloc[0].emr_nm)}")
         saved_clicked = st.form_submit_button("DAG 설정 저장", type="primary", icon=":material/save:")
     settings = {"s3_default": s3_default, "s3_maximum": s3_maximum, "ins_default": ins_default, "ins_maximum": ins_maximum, "incr_schedule": incr_schedule, "airflow_id": airflow_id, "emr_id": emr_id}
@@ -618,8 +620,12 @@ def render_dag_generator(areas: pd.DataFrame, maps: pd.DataFrame, values: dict[s
         if candidates.empty:
             st.info("조건에 맞는 테이블매핑이 없습니다.", icon=":material/info:")
             return
-        selected_map = st.selectbox("테이블매핑", candidates.mpg_id.tolist(), format_func=lambda item: f"{item} · {candidates.loc[candidates.mpg_id.eq(item)].iloc[0].src_sch_nm}.{candidates.loc[candidates.mpg_id.eq(item)].iloc[0].src_tbl_nm} → {candidates.loc[candidates.mpg_id.eq(item)].iloc[0].tgt_sch_nm}.{candidates.loc[candidates.mpg_id.eq(item)].iloc[0].tgt_tbl_nm}")
+        mapping_options = candidates.mpg_id.tolist()
+        requested_mapping = text(st.query_params.get("mpg_id"))
+        selected_map = st.selectbox("테이블매핑", mapping_options, index=mapping_options.index(int(requested_mapping)) if requested_mapping.isdigit() and int(requested_mapping) in mapping_options else 0, format_func=lambda item: f"{item} · {candidates.loc[candidates.mpg_id.eq(item)].iloc[0].src_sch_nm}.{candidates.loc[candidates.mpg_id.eq(item)].iloc[0].src_tbl_nm} → {candidates.loc[candidates.mpg_id.eq(item)].iloc[0].tgt_sch_nm}.{candidates.loc[candidates.mpg_id.eq(item)].iloc[0].tgt_tbl_nm}")
         row = candidates.loc[candidates.mpg_id.eq(selected_map)].iloc[0].to_dict()
+        if st.button("매핑 수정", icon=":material/link:", key=f"dag_mapping_{selected_map}"):
+            st.switch_page("SrcTgtControl.py", query_params={"mpg_id": str(int(selected_map))})
         if mode == "일회성 재적재":
             st.caption("현재 FULL·INCR 기본 적재상태는 바꾸지 않습니다. Airflow 실행 시 전체 또는 WHERE 병렬 조건은 dag_run.conf로 지정합니다.")
         sources = table_dag_sources(row, settings, "INCR" if mode == "테이블별 증분" else "RELOAD")

@@ -56,10 +56,10 @@ def render_monitor(context: RuntimeContext) -> None:
         st.error(f"실행 현황 조회 실패: {error}", icon=":material/error:")
         return
     render_cards(tables)
-    st.subheader("DAG 실행")
+    st.caption(":material/account_tree: DAG 실행")
     dag_display = runs.rename(columns={"dag_nm": "DAG명", "dag_run_id": "DAG실행ID", "dag_dvsn_cd": "DAG구분", "map_cnt": "전체", "suc_cnt": "완료", "run_cnt": "진행중", "err_cnt": "오류", "wrk_sts_cd": "상태", "wrk_stt_dtm": "시작일시", "wrk_end_dtm": "종료일시", "wrk_elps_sec": "경과초", "wrk_msg": "메시지"})
     st.dataframe(dag_display.drop(columns=["dag_exec_id"]), hide_index=True, height=300, column_config={"전체": st.column_config.NumberColumn(format="localized"), "완료": st.column_config.NumberColumn(format="localized"), "진행중": st.column_config.NumberColumn(format="localized"), "오류": st.column_config.NumberColumn(format="localized")})
-    st.subheader("테이블 실행")
+    st.caption(":material/table_chart: 테이블 실행")
     table_display = tables.rename(columns={"mpg_id": "테이블매핑ID", "prj_cd": "프로젝트코드", "up_sbj_area_cd": "상위주제영역코드", "up_sbj_area_nm": "상위주제영역명", "sbj_area_cd": "주제영역코드", "sbj_area_nm": "주제영역명", "src_tbl": "원천테이블", "tgt_tbl": "대상테이블", "dag_nm": "DAG명", "dag_run_id": "DAG실행ID", "wrk_dvsn_cd": "작업구분", "wrk_sts_cd": "상태", "src_row_cnt": "원천건수", "tgt_row_cnt": "대상건수", "wrk_stt_dtm": "시작일시", "wrk_end_dtm": "종료일시", "wrk_elps_sec": "경과초", "wrk_msg": "메시지"})
     st.dataframe(table_display.drop(columns=["메시지"]), hide_index=True, height=420, column_config={"원천건수": st.column_config.NumberColumn(format="localized"), "대상건수": st.column_config.NumberColumn(format="localized"), "경과초": st.column_config.NumberColumn(format="localized")})
 
@@ -67,10 +67,10 @@ def render_monitor(context: RuntimeContext) -> None:
 try:
     monitor_context = public_monitor_context()
 except Exception:
-    st.title("📈 실행 현황")
+    st.subheader(":material/monitoring: 실행 현황")
     st.info("초기 설정 메뉴에서 메타 연결과 스키마를 준비한 뒤 다시 선택하십시오.", icon=":material/settings:")
 else:
-    st.title("📈 실행 현황")
+    st.subheader(":material/monitoring: 실행 현황")
 
     @st.fragment(run_every="5s")
     def auto_refresh() -> None:

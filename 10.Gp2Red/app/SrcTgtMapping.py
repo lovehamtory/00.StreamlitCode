@@ -419,8 +419,16 @@ def automatic_columns(source: pd.DataFrame, target: pd.DataFrame) -> tuple[pd.Da
 
 def render_single(maps: pd.DataFrame, values: dict[str, Any], schema_name: str, query_frame: Callable[..., pd.DataFrame], connect: Callable[[dict[str, Any]], Any], qualified: Callable[[str, str], str]) -> None:
     options = ["신규", *[int(value) for value in maps.mpg_id.tolist()]]
-    selected = st.selectbox("테이블매핑", options, format_func=lambda value: "신규 테이블매핑" if value == "신규" else f"{value} · {maps.loc[maps.mpg_id.eq(value)].iloc[0].src_sch_nm}.{maps.loc[maps.mpg_id.eq(value)].iloc[0].src_tbl_nm} → {maps.loc[maps.mpg_id.eq(value)].iloc[0].tgt_sch_nm}.{maps.loc[maps.mpg_id.eq(value)].iloc[0].tgt_tbl_nm}")
+    requested = text(st.query_params.get("mpg_id"))
+    selected_index = options.index(int(requested)) if requested.isdigit() and int(requested) in options else 0
+    selected = st.selectbox("테이블매핑", options, index=selected_index, format_func=lambda value: "신규 테이블매핑" if value == "신규" else f"{value} · {maps.loc[maps.mpg_id.eq(value)].iloc[0].src_sch_nm}.{maps.loc[maps.mpg_id.eq(value)].iloc[0].src_tbl_nm} → {maps.loc[maps.mpg_id.eq(value)].iloc[0].tgt_sch_nm}.{maps.loc[maps.mpg_id.eq(value)].iloc[0].tgt_tbl_nm}")
     current = None if selected == "신규" else maps.loc[maps.mpg_id.eq(selected)].iloc[0]
+    if current is not None:
+        links = st.columns(2)
+        if links[0].button("대상 DDL 수정", icon=":material/data_object:", key=f"mapping_ddl_{selected}"):
+            st.switch_page("SrcTgtTargetDdl.py", query_params={"mpg_id": str(int(selected))})
+        if links[1].button("DAG 생성", icon=":material/account_tree:", key=f"mapping_dag_{selected}"):
+            st.switch_page("SrcTgtDagManagement.py", query_params={"sbj_area_cd": text(current.sbj_area_cd), "mpg_id": str(int(selected))})
     try:
         connections = connection_frame(query_frame, values, schema_name, qualified, active_only=True)
         areas = subject_connections(query_frame, values, schema_name, qualified)
@@ -734,43 +742,44 @@ def render_sql_editor(maps: pd.DataFrame, values: dict[str, Any], schema_name: s
     except Exception as error:
         st.error(f"SQL 생성 실패: {error}", icon=":material/error:")
         return
-    editor_tab, history_tab = st.tabs(["이관·이행 SQL", "SQL 이력"])
-    with editor_tab:
+    source_tab, target_tab = st.tabs(["S3 이관 SQL", "INS 이행 SQL"])
+    with source_tab:
         source_mode = st.segmented_control("SRC→S3 이관 SQL", ["자동", "수정"], default="수정" if text(saved.src_ext_sql) else "자동", key=f"source_sql_mode_{selected}")
         if source_mode == "수정":
             source_sql = st.text_area("SRC→S3 이관 SQL", value=text(saved.src_ext_sql) or source_auto, height=260, key=f"source_sql_{selected}")
         else:
             source_sql = source_auto
             st.code(source_auto, language="sql")
+    with target_tab:
         target_mode = st.segmented_control("S3→TGT 이행 SQL", ["자동", "수정"], default="수정" if text(saved.tgt_load_sql) else "자동", key=f"target_sql_mode_{selected}")
         if target_mode == "수정":
             target_sql = st.text_area("S3→TGT 이행 SQL", value=text(saved.tgt_load_sql) or target_auto, height=360, key=f"target_sql_{selected}")
         else:
             target_sql = target_auto
             st.code(target_auto, language="sql")
-        if st.button("SQL 저장", type="primary", icon=":material/save:", key=f"save_sql_{selected}"):
-            try:
-                save_sql_overrides(connect, values, schema_name, qualified, int(selected), source_sql, target_sql, columns)
-                st.success("이관·이행 SQL을 저장했습니다.", icon=":material/check_circle:")
-                st.rerun()
-            except Exception as error:
-                st.error(f"실행 SQL 저장 실패: {error}", icon=":material/error:")
-    with history_tab:
+    if st.button("SQL 저장", type="primary", icon=":material/save:", key=f"save_sql_{selected}"):
+        try:
+            save_sql_overrides(connect, values, schema_name, qualified, int(selected), source_sql, target_sql, columns)
+            st.success("이관·이행 SQL을 저장했습니다.", icon=":material/check_circle:")
+            st.rerun()
+        except Exception as error:
+            st.error(f"실행 SQL 저장 실패: {error}", icon=":material/error:")
+    with st.expander("SQL 이력"):
         try:
             history = sql_history(query_frame, values, schema_name, qualified, int(selected))
             if history.empty:
                 st.info("저장된 SQL 이력이 없습니다.", icon=":material/info:")
-                return
-            st.dataframe(history[["이력ID", "메타버전", "변경사유", "변경일시"]], hide_index=True)
-            history_id = st.selectbox("복원 SQL 이력", history["이력ID"].astype(int).tolist(), format_func=lambda value: f"{value} · {history.loc[history['이력ID'].eq(value)].iloc[0]['변경일시']}", key=f"restore_sql_history_{selected}")
-            selected_history = history.loc[history["이력ID"].eq(history_id)].iloc[0]
-            st.code(text(selected_history["변경SQL"]), language="json")
-            if st.button("선택 SQL 복원", type="primary", icon=":material/restore:", key=f"restore_sql_{selected}"):
-                restored = json.loads(text(selected_history["변경SQL"]) or "{}")
-                validate_sql_pair(restored.get("SRC_EXT_SQL"), restored.get("TGT_LOAD_SQL"), columns)
-                restore_sql_history(connect, values, schema_name, qualified, int(selected), int(history_id))
-                st.success("선택 SQL 이력으로 복원했습니다.", icon=":material/check_circle:")
-                st.rerun()
+            else:
+                st.dataframe(history[["이력ID", "메타버전", "변경사유", "변경일시"]], hide_index=True)
+                history_id = st.selectbox("복원 SQL 이력", history["이력ID"].astype(int).tolist(), format_func=lambda value: f"{value} · {history.loc[history['이력ID'].eq(value)].iloc[0]['변경일시']}", key=f"restore_sql_history_{selected}")
+                selected_history = history.loc[history["이력ID"].eq(history_id)].iloc[0]
+                st.code(text(selected_history["변경SQL"]), language="json")
+                if st.button("선택 SQL 복원", type="primary", icon=":material/restore:", key=f"restore_sql_{selected}"):
+                    restored = json.loads(text(selected_history["변경SQL"]) or "{}")
+                    validate_sql_pair(restored.get("SRC_EXT_SQL"), restored.get("TGT_LOAD_SQL"), columns)
+                    restore_sql_history(connect, values, schema_name, qualified, int(selected), int(history_id))
+                    st.success("선택 SQL 이력으로 복원했습니다.", icon=":material/check_circle:")
+                    st.rerun()
         except Exception as error:
             st.error(f"SQL 이력 처리 실패: {error}", icon=":material/error:")
 
@@ -822,12 +831,10 @@ def render_load_transition(maps: pd.DataFrame, values: dict[str, Any], schema_na
 
 
 def render_mapping_workspace(maps: pd.DataFrame, values: dict[str, Any], schema_name: str, query_frame: Callable[..., pd.DataFrame], connect: Callable[[dict[str, Any]], Any], qualified: Callable[[str, str], str]) -> None:
-    mapping_tab, sql_tab, transition_tab, upload_tab = st.tabs(["매핑", "SQL 생성·수정", "적재상태 전환", "일괄 업로드"])
-    with mapping_tab:
-        render_single(maps, values, schema_name, query_frame, connect, qualified)
-    with sql_tab:
-        render_sql_editor(maps, values, schema_name, query_frame, connect, qualified)
-    with transition_tab:
+    render_single(maps, values, schema_name, query_frame, connect, qualified)
+    st.divider()
+    render_sql_editor(maps, values, schema_name, query_frame, connect, qualified)
+    with st.expander("적재상태 전환"):
         render_load_transition(maps, values, schema_name, connect, qualified)
-    with upload_tab:
+    with st.expander("일괄 업로드"):
         render_upload(values, schema_name, connect, qualified)

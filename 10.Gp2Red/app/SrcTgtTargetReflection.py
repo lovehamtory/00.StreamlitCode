@@ -144,7 +144,7 @@ def mapping_label(frame: pd.DataFrame, mapping_id: int) -> str:
 
 
 def render_target_reflection(context: RuntimeContext) -> None:
-    st.subheader("대상 반영안")
+    st.caption(":material/schema: 대상 반영안")
     try:
         mappings = table_maps(context)
         connections = connection_frame(query_frame, context.values, context.schema_name, qualified, active_only=True)
@@ -154,7 +154,16 @@ def render_target_reflection(context: RuntimeContext) -> None:
     if mappings.empty:
         st.info("대상 반영안을 만들 테이블 매핑이 없습니다.", icon=":material/info:")
         return
-    mapping_id = st.selectbox("테이블 매핑", mappings.mpg_id.tolist(), format_func=lambda value: mapping_label(mappings, value), key="target_reflection_mapping")
+    options = mappings.mpg_id.tolist()
+    requested = text(st.query_params.get("mpg_id"))
+    selected_index = options.index(int(requested)) if requested.isdigit() and int(requested) in options else 0
+    mapping_id = st.selectbox("테이블 매핑", options, index=selected_index, format_func=lambda value: mapping_label(mappings, value), key="target_reflection_mapping")
+    links = st.columns(2)
+    if links[0].button("매핑 수정", icon=":material/link:", key=f"ddl_mapping_{mapping_id}"):
+        st.switch_page("SrcTgtControl.py", query_params={"mpg_id": str(int(mapping_id))})
+    if links[1].button("DAG 생성", icon=":material/account_tree:", key=f"ddl_dag_{mapping_id}"):
+        area = text(mappings.loc[mappings.mpg_id.eq(mapping_id)].iloc[0].sbj_area_cd)
+        st.switch_page("SrcTgtDagManagement.py", query_params={"sbj_area_cd": area, "mpg_id": str(int(mapping_id))})
     mapping = mappings.loc[mappings.mpg_id.eq(mapping_id)].iloc[0]
     columns = column_maps(context, int(mapping_id))
     stored_key = f"target_ddl_source_{mapping_id}"
