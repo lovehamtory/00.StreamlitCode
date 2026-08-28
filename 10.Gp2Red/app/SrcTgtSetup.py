@@ -16,7 +16,7 @@ except ImportError:
 
 
 PROJECT_ROOT = Path(__file__).parent.parent
-SCHEMA_CONFIG = PROJECT_ROOT.parent / ".streamlit" / "migration_setup.toml"
+SCHEMA_CONFIG = PROJECT_ROOT / "app" / ".streamlit" / "migration_setup.toml"
 REQUIRED_TABLES = {"tb_mig_usr", "tb_mig_auth_grp", "tb_mig_menu_auth", "tb_mig_usr_auth", "tb_mig_conn", "tb_mig_airflow", "tb_mig_emr", "tb_mig_sbj_area", "tb_mig_sbj_dag_mpg", "tb_mig_dag_dply_hist", "tb_mig_emr_run", "tb_mig_src_layout", "tb_mig_tbl_mpg", "tb_mig_col_mpg", "tb_mig_mpg_chg_hist", "tb_mig_s3_manf", "tb_mig_dag_run", "tb_mig_run_log", "tb_mig_vald_rslt", "tb_mig_vald_col_rslt", "tb_mig_tbl_load_hist", "tb_mig_artf_item"}
 
 
@@ -52,7 +52,7 @@ def connection_values() -> dict[str, Any]:
     except Exception:
         settings = {}
         secret_sections = {}
-    section = text(settings.get("connection_section")) or "redshift_sql"
+    section = text(settings.get("connection_section")) or "tgt_red"
     if section not in secret_sections:
         raise ValueError("초기 설정용 Redshift 연결 설정이 없습니다.")
     values = dict(secret_sections[section])
@@ -92,62 +92,29 @@ def save_schema(schema: str) -> None:
 
 
 def initialize(values: dict[str, Any], schema: str) -> None:
+    item_schema = schema_name(schema)
     with connect(values) as connection:
         with connection.cursor() as cursor:
-            cursor.execute("SELECT 1 FROM information_schema.schemata WHERE schema_name = %s", (schema,))
-            if cursor.fetchone() is None:
-                raise ValueError("선택한 스키마가 없습니다. DBA가 스키마를 생성한 뒤 다시 실행하십시오.")
-            cursor.execute(ddl_source(schema))
+            cursor.execute("SELECT 1 FROM information_schema.tables WHERE table_schema = %s AND table_name = ANY(%s) LIMIT 1", (item_schema, list(REQUIRED_TABLES)))
+            if cursor.fetchone() is not None:
+                raise ValueError("기존 이관 메타가 있어 최초 메타 설치를 실행할 수 없습니다.")
+            cursor.execute(f'CREATE SCHEMA IF NOT EXISTS "{item_schema}"')
+            cursor.execute(ddl_source(item_schema))
         connection.commit()
-    save_schema(schema)
-
-
-def backup_table_names(schema: str, standard_date: str) -> list[tuple[str, str]]:
-    return [(table_name, f"{table_name}_{standard_date}") for table_name in sorted(REQUIRED_TABLES)]
-
-
-def backup_metadata(values: dict[str, Any], schema: str, standard_date: str) -> int:
-    backups = backup_table_names(schema, standard_date)
-    with connect(values) as connection:
-        with connection.cursor() as cursor:
-            cursor.execute("SELECT table_name FROM information_schema.tables WHERE table_schema = %s AND table_name = ANY(%s)", (schema, [source for source, _ in backups]))
-            existing = {text(row[0]).lower() for row in cursor.fetchall()}
-            if not existing:
-                raise ValueError("백업할 이관 메타 테이블이 없습니다.")
-            cursor.execute("SELECT table_name FROM information_schema.tables WHERE table_schema = %s AND table_name = ANY(%s)", (schema, [target for _, target in backups]))
-            duplicate = {text(row[0]).lower() for row in cursor.fetchall()}
-            if duplicate:
-                raise ValueError(f"오늘자 백업 테이블이 이미 있습니다: {', '.join(sorted(duplicate))}")
-            for source, target in backups:
-                if source in existing:
-                    cursor.execute(f"CREATE TABLE {schema}.{target} AS SELECT * FROM {schema}.{source}")
-        connection.commit()
-    return len(existing)
+    save_schema(item_schema)
 
 
 def render_initial_setup() -> None:
-    st.warning("DBA가 만든 스키마를 선택하십시오. 메타 생성은 그 안의 이관 메타 뷰·테이블만 삭제한 뒤 다시 만듭니다.", icon=":material/warning:")
+    st.info("최초 이관 메타를 설치합니다. 기존 이관 메타가 있으면 설치하지 않습니다.", icon=":material/info:")
     default_schema = configured_schema()
     value = st.text_input("메타데이터 스키마", value=default_schema, placeholder="예: migration_meta")
-    backup, create = st.columns(2)
-    with backup:
-        backed_up = st.button("메타데이터 백업", icon=":material/backup:", width="stretch")
-    with create:
-        submitted = st.button("메타 생성", type="primary", icon=":material/play_circle:", width="stretch")
-    if backed_up:
-        try:
-            from SrcTgtSecurity import require_save
-            require_save("INIT")
-            count = backup_metadata(connection_values(), schema_name(value), pd.Timestamp.now().strftime("%Y%m%d"))
-            st.success(f"메타 테이블 {count:,}건을 오늘자 CTAS 백업으로 생성했습니다.", icon=":material/check_circle:")
-        except Exception as error:
-            st.error(f"메타데이터 백업 실패: {error}", icon=":material/error:")
+    submitted = st.button("메타 설치", type="primary", icon=":material/play_circle:", width="content")
     if submitted:
         try:
             from SrcTgtSecurity import require_save
             require_save("INIT")
             initialize(connection_values(), schema_name(value))
-            st.success("메타데이터를 생성했습니다. 이관 관리로 계속하십시오.", icon=":material/check_circle:")
+            st.success("이관 메타를 설치했습니다. 다시 로그인하십시오.", icon=":material/check_circle:")
             st.rerun()
         except Exception as error:
-            st.error(f"초기 설정 실패: {error}", icon=":material/error:")
+            st.error(f"메타 설치 실패: {error}", icon=":material/error:")

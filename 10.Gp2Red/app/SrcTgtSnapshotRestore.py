@@ -22,8 +22,8 @@ TERMINAL_STATES = {"SUCCEEDED", "FAILED", "CANCELED"}
 ACTIVE_STATES = {"QUEUED", "PENDING", "IN_PROGRESS", "WAIT_TIMEOUT"}
 SNAPSHOT_TYPES = {"전체": None, "자동": "automated", "수동": "manual"}
 RESTORE_MODES = {"별도 테이블 복구": "copy", "원본 DROP 후 복구": "replace"}
-PROJECT_ROOT = Path(__file__).resolve().parents[2]
-RUN_STORE = PROJECT_ROOT / "10.Gp2Red" / "log" / "snapshot_restore_runs"
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+RUN_STORE = PROJECT_ROOT / "log" / "snapshot_restore_runs"
 
 
 def utc_now() -> str:

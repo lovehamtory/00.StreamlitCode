@@ -2,18 +2,55 @@
 
 Streamlit은 메타 관리, SQL·DAG 생성, Airflow 배포, 운영 조회와 산출물 생성을 담당합니다. 실제 추출·적재·검증 실행은 Airflow DAG가 담당합니다.
 
+## 설치
+
+Python 코드와 설치 파일은 분리해 배포합니다. `setup` 폴더를 포함한 프로젝트 폴더에서 PowerShell을 열고 아래 한 줄을 실행합니다.
+
+```powershell
+.\setup\install.ps1
+```
+
+`setup/install.ps1`은 Python 확인·설치, 가상환경 생성, 필수 라이브러리 설치, 실행 위치의 `app/.streamlit/secrets.toml` 생성까지 처리합니다. VDI 정책으로 스크립트 실행이 막히면 아래 명령 후 다시 실행합니다.
+
+```powershell
+Set-ExecutionPolicy -Scope Process -ExecutionPolicy Bypass
+```
+
+### 메타 DB 연결 설정
+
+`app\.streamlit\secrets.toml` 파일을 열고 메타 DB 접속정보를 입력합니다. 실제 값은 개인 PC 또는 실행 서버에만 둡니다.
+
+```toml
+[migration_metadata]
+connection_section = "tgt_red"
+
+[src_gp]
+host = ""
+port = 5432
+database = ""
+user = ""
+password = ""
+
+[tgt_red]
+host = ""
+port = 5439
+database = ""
+user = ""
+password = ""
+```
+
 ## 실행·초기 설정
 
 ```powershell
-python -m streamlit run 10.Gp2Red\app\SrcTgtOrchestrator.py --server.port 8502
+.\setup\run.ps1
 ```
 
 1. `admin/admin`으로 로그인합니다.
 2. 메타가 없으면 `초기 설정`만 표시됩니다.
-3. DBA가 생성한 메타 스키마를 입력하고 백업 후 메타를 생성합니다.
+3. 메타 스키마명(예: `mig_meta`)을 입력하고 `메타 설치`를 실행합니다.
 4. 다시 로그인하여 비밀번호를 변경합니다.
 
-메타 생성은 이관 메타 테이블·뷰를 재생성합니다. 기존 메타는 반드시 백업 후 생성합니다. 업무 테이블과 원천·대상 물리 테이블은 변경하지 않습니다.
+메타 설치는 스키마와 이관 메타 테이블·뷰를 만듭니다. 기존 이관 메타가 하나라도 있으면 설치를 중단하며, 업무 테이블과 원천·대상 물리 테이블은 변경하지 않습니다.
 
 ## 메뉴·업무 순서
 
@@ -156,8 +193,8 @@ Airflow에는 아래 항목이 필요합니다.
 ## 검증·배포 전 확인
 
 ```powershell
-python 10.Gp2Red\tests\virtual_workflow_test.py
-Get-ChildItem 10.Gp2Red\app -Filter *.py | ForEach-Object { python -m py_compile $_.FullName }
+python tests\virtual_workflow_test.py
+Get-ChildItem app -Filter *.py | ForEach-Object { python -m py_compile $_.FullName }
 ```
 
 가상 검증은 DDL 계약, 타입 변환, DAG 생성, 실패 차단, 병렬 조건, Excel 형식을 확인합니다. 실제 DB·S3·Airflow 접속 검증은 별도로 수행합니다.

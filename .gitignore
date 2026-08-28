@@ -1,8 +1,9 @@
 .streamlit/secrets.toml
-.streamlit/migration_setup.toml
+**/.streamlit/secrets.toml
+**/.streamlit/migration_setup.toml
 __pycache__/
 *.pyc
-10.Gp2Red/log/
+**/log/
 .cache/
 tmp/
 generated-image.png
