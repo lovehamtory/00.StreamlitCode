@@ -1,6 +1,6 @@
 # SRC → S3 → TGT 이관 관리 운영자 매뉴얼
 
-이 도구는 Greenplum 등 원천 DB에서 S3 Parquet 기준본을 만들고, 검증된 기준본을 Redshift 등 대상으로 이행하기 위한 이관 전용 관리 도구입니다. Streamlit은 메타 관리·DAG 생성·로그 조회·산출물 생성을 담당합니다. 실제 DAG 배포와 실행 순서 결정은 Airflow 운영자가 담당합니다.
+이 도구는 Greenplum 등 원천 DB에서 S3 Parquet 기준본을 만들고, 검증된 기준본을 Redshift 등 대상으로 이행하기 위한 이관 전용 관리 도구입니다. Streamlit은 메타 관리·DAG 생성·Airflow 배포·로그 조회·산출물 생성을 담당합니다. 실제 이관 실행은 Airflow가 담당합니다.
 
 비밀번호, 접속문자열, AWS 키는 화면·메타 테이블·Git에 저장하지 않습니다. PC별 `.streamlit/secrets.toml`과 Airflow Connection/Variable에만 관리합니다.
 
@@ -32,8 +32,10 @@
 | 4 | 구조·변경 > 원천 레이아웃 | 원천 기준일·스키마 수집 | 컬럼·PK·NULL 기준본 저장 |
 | 5 | 이관 관리 > SRC·TGT 매핑 | 테이블·컬럼, 표준 대상명, 변환식, 검증 규칙 등록 | 이행 규칙 확정 |
 | 6 | 구조·변경 > 대상 반영안 | 대상 DDL 조회·수정·저장·적용 | DROP·CREATE 및 COMMENT ON 실행 |
-| 7 | 이관 관리 > DAG 생성 | 주제영역 전체 또는 테이블별 DAG 생성 | `dag` 폴더 Python 파일 생성 |
-| 8 | Airflow | 파일 배포, Connection/Variable 설정, 실행 순서 결정 | 실제 이관 실행 |
+| 7 | 이관 관리 > Airflow | Airflow 환경과 배포 방식을 등록 | 자동 배포 대상 준비 |
+| 8 | 이관 관리 > EMR | 전용·공용 EMR과 자동 종료 정책 등록 | 비용 보호 정책 준비 |
+| 9 | 이관 관리 > DAG 생성 | 주제영역 전체 또는 테이블별 DAG 생성·배포 | 로컬 DAG 보관, Airflow 비활성 등록 |
+| 10 | Airflow | Connection/Variable 설정, 실행 순서 결정 | 실제 이관 실행 |
 | 9 | 실행 현황·검증 | 상태·건수·오류·검증 결과 확인 | 보정 대상 식별 |
 | 10 | 산출물 | 정의서·테스트·검증 결과서 생성 | Excel 파일 생성 |
 
@@ -213,7 +215,26 @@ s3://기준경로/
 
 컬럼 매핑의 `SUM_VALD_YN`, `HSH_VALD_YN`만 선택값입니다. COUNT 검증은 항상 수행합니다. 매핑 저장 시 메타 버전이 증가하고 `TB_MIG_MPG_CHG_HIST`에 테이블·컬럼 변경 이력이 남습니다.
 
-## 9. DAG 생성과 Airflow 배포
+## 9. Airflow·EMR 관리와 DAG 자동 배포
+
+### 9.1 Airflow
+
+Airflow는 여러 환경을 등록할 수 있습니다. 실제 인증정보는 `TB_MIG_AIRFLOW`가 아닌 PC별 Secrets에만 둡니다. 배포 방식은 아래 둘 중 하나를 선택합니다.
+
+| 배포방식 | Secrets 필수 항목 | 동작 |
+| --- | --- | --- |
+| `SHARED_PATH` | `dag_deploy_root`, `airflow_api_url` | Streamlit 서버가 공유 DAG 경로에 원자적으로 파일 저장 후 Airflow API로 비활성 전환 |
+| `DEPLOY_AGENT` | `deploy_agent_url`, `deploy_agent_token`, `airflow_api_url` | 배포 에이전트에 파일 전달 후 Airflow API로 비활성 전환 |
+
+Airflow API는 DAG 파일을 업로드하는 기능이 아닙니다. 따라서 공유 경로 또는 별도 배포 에이전트가 필수입니다. Airflow API 인증은 `airflow_api_token` 또는 `airflow_api_username`·`airflow_api_password`를 Secrets에 둡니다. 파일 저장 후 Airflow가 DAG를 인식할 때까지 최대 30초 동안 확인하고, 인식된 DAG만 paused 상태로 전환합니다. 생성 실패·배포 실패·비활성 전환 실패는 `TB_MIG_DAG_DPLY_HIST`에 남습니다.
+
+### 9.2 EMR
+
+EMR은 `EMR_EC2`, `EMR_SERVERLESS`를 등록할 수 있습니다. `전용 EMR`일 때만 `DAG 종료 후 자동 종료`를 선택할 수 있습니다. 공용 EMR은 다른 업무가 사용할 수 있으므로 자동·화면 강제 종료를 허용하지 않습니다.
+
+EMR 자동 종료는 S3 또는 INS 단독 DAG에는 붙지 않고, `ALL` DAG가 성공·실패로 종료된 뒤에만 실행됩니다. 종료 요청도 실패하면 DAG 실패로 기록되며 `TB_MIG_EMR_RUN`과 작업로그에 남습니다. Airflow에는 Amazon Provider와 등록한 `AWS_CONN_ID`가 필요합니다.
+
+### 9.3 DAG 생성과 Airflow 배포
 
 ### 9.1 주제영역 전체·검증 DAG
 
@@ -237,7 +258,7 @@ s3://기준경로/
 
 `일회성 재적재` 생성은 기본 상태를 바꾸지 않습니다. `reload_src_s3`, `reload_s3_tgt`, `reload_all` 세 DAG가 만들어지며 전체 또는 WHERE 병렬 재적재에 사용합니다.
 
-생성된 DAG 파일은 `10.Gp2Red/dag`에 남깁니다. 문제 확인을 위해 자동 삭제하지 않습니다. Airflow 배포 전에 다음을 준비합니다.
+생성된 DAG 파일은 `10.Gp2Red/dag`에 남깁니다. 문제 확인을 위해 자동 삭제하지 않습니다. `DAG 저장·Airflow 배포`는 로컬 파일 저장, 지정 Airflow 배포, Airflow 인식 확인, paused 전환, 배포이력 기록을 한 번에 처리합니다.
 
 | Airflow 항목 | 값 |
 | --- | --- |
@@ -246,8 +267,9 @@ s3://기준경로/
 | Variable | `mig_metadata_conn_id` |
 | Variable | `mig_executor_module` |
 | Python 모듈 | `run_s3`, `run_s3_reset`, `run_s3_cleanup`, `run_ins`, `run_validate_src_s3`, `run_validate_s3_tgt` 실행 함수 |
+| Airflow Provider | EMR 사용 시 Amazon Provider 및 `AWS_CONN_ID` |
 
-생성 DAG는 이 여섯 실행 함수를 호출하는 공통 껍데기입니다. `run_s3_reset`은 FULL 추출 전에 테이블의 FULL 접두어를 한 번만 비우고, `run_s3`은 `record["src_extract_sql"]`을 실행해 원천 레이아웃 Parquet을 만들고 `s3_mnf_path`, `s3_data_path`를 반환합니다. SRC→S3 검증 성공 후 `run_s3_cleanup`은 최근 31일을 넘긴 INCR 접두어만 정리합니다. DAG는 실제 원천 조회조건과 함께 이를 `TB_MIG_S3_MANF`에 저장하고 반환값의 `s3_manf_id`를 TaskFlow XCom으로 다음 태스크에 전달합니다. `run_ins` 호출 전 대상 테이블명·대상 컬럼명·이행 SQL을 반영한 `DELETE·INSERT` SQL 계획을 `record["tgt_load_sql"]`에 담습니다. 실행 모듈은 매니페스트의 S3 데이터를 대상 스테이지에 준비한 뒤 `__MIG_STAGE__`를 실제 스테이지 테이블명으로 치환해 실행합니다. 실제 JDBC/ODBC/psycopg 추출·Parquet 생성·COPY·검증 SQL은 Airflow 실행 모듈에 구현합니다. Streamlit에서 Airflow를 직접 배포하거나 실행하지 않습니다.
+생성 DAG는 이 여섯 실행 함수를 호출하는 공통 껍데기입니다. `run_s3_reset`은 FULL 추출 전에 테이블의 FULL 접두어를 한 번만 비우고, `run_s3`은 `record["src_extract_sql"]`을 실행해 원천 레이아웃 Parquet을 만들고 `s3_mnf_path`, `s3_data_path`를 반환합니다. SRC→S3 검증 성공 후 `run_s3_cleanup`은 최근 31일을 넘긴 INCR 접두어만 정리합니다. DAG는 실제 원천 조회조건과 함께 이를 `TB_MIG_S3_MANF`에 저장하고 반환값의 `s3_manf_id`를 TaskFlow XCom으로 다음 태스크에 전달합니다. `run_ins` 호출 전 대상 테이블명·대상 컬럼명·이행 SQL을 반영한 `DELETE·INSERT` SQL 계획을 `record["tgt_load_sql"]`에 담습니다. 실행 모듈은 매니페스트의 S3 데이터를 대상 스테이지에 준비한 뒤 `__MIG_STAGE__`를 실제 스테이지 테이블명으로 치환해 실행합니다. 실제 JDBC/ODBC/psycopg 추출·Parquet 생성·COPY·검증 SQL은 Airflow 실행 모듈에 구현합니다. Streamlit은 DAG 배포와 비활성 등록까지 수행하며, Airflow 실행 버튼을 대신 누르지는 않습니다.
 
 ### 실행 서버 설치 원칙
 

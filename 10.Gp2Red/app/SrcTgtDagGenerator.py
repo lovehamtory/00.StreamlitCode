@@ -9,6 +9,9 @@ from typing import Any, Callable
 import pandas as pd
 import streamlit as st
 
+from SrcTgtAirflow import airflow_frame, deploy_sources, save_deploy_history
+from SrcTgtEmr import emr_frame
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DAG_OUTPUT_ROOT = PROJECT_ROOT / "dag"
@@ -55,7 +58,7 @@ def parse_conditions(value: object) -> list[str]:
     return [text(item) for item in parsed]
 
 
-def generated_source(dag_name: str, dag_type: str, subject_area: str, mapping_id: int | None, parallelism: int, schedule: str | None, tags: list[str]) -> str:
+def generated_source(dag_name: str, dag_type: str, subject_area: str, mapping_id: int | None, parallelism: int, schedule: str | None, tags: list[str], emr_id: str | None = None) -> str:
     filter_clause = "sbj_area_cd = %s" if mapping_id is None else "mpg_id = %s"
     filter_value = subject_area if mapping_id is None else int(mapping_id)
     flow = text(dag_type).upper()
@@ -85,6 +88,7 @@ from airflow.decorators import dag, task
 from airflow.models import Variable
 from airflow.providers.postgres.hooks.postgres import PostgresHook
 from airflow.utils.trigger_rule import TriggerRule
+from common.mig_emr_runtime import terminate_profile
 
 DAG_ID = {dag_name!r}
 DAG_TYPE = {flow!r}
@@ -96,6 +100,7 @@ MAX_PARALLEL = {int(parallelism)}
 EXECUTOR_MODULE = Variable.get("mig_executor_module", default_var="")
 METADATA_CONN_ID = Variable.get("mig_metadata_conn_id", default_var="")
 METADATA_SCHEMA = Variable.get("mig_metadata_schema", default_var="mig_meta")
+EMR_ID = {text(emr_id).upper() or None!r}
 
 def metadata_hook() -> PostgresHook:
     if not METADATA_CONN_ID:
@@ -104,6 +109,15 @@ def metadata_hook() -> PostgresHook:
 
 def meta_table(name: str) -> str:
     return METADATA_SCHEMA + "." + name
+
+def emr_profile() -> dict[str, Any] | None:
+    if not EMR_ID:
+        return None
+    row = metadata_hook().get_first("SELECT emr_id, emr_type_cd, aws_conn_id, emr_cluster_id, dedicated_yn, auto_term_yn FROM " + meta_table("tb_mig_emr") + " WHERE emr_id = %s AND active_yn = TRUE", parameters=(EMR_ID,))
+    if not row:
+        raise RuntimeError("사용 중인 EMR 정보를 찾을 수 없습니다: " + EMR_ID)
+    fields = ["emr_id", "emr_type_cd", "aws_conn_id", "emr_cluster_id", "dedicated_yn", "auto_term_yn"]
+    return dict(zip(fields, row))
 
 def mappings(dag_run_id: str) -> list[dict[str, Any]]:
     query = "SELECT mpg_id, prj_cd, sbj_area_cd, src_conn_id, src_sch_nm, src_tbl_nm, tgt_conn_id, tgt_sch_nm, tgt_tbl_nm, load_sts_cd, sys_col_nm_arr, sys_col_fmt_cd, incr_mthd_cd, src_incr_col_nm_arr, parl_mthd_cd, parl_cnd_arr, src_ext_sql, tgt_load_sql, s3_stg_path, s3_rlt_path FROM " + meta_table("vw_mig_dag_tbl_mpg") + " WHERE " + MAP_FILTER_SQL + {load_filter!r} + " ORDER BY mpg_id"
@@ -333,6 +347,13 @@ def write_log(record: dict[str, Any], step: str, status: str, message: str) -> N
     now = datetime.now()
     metadata_hook().run("INSERT INTO " + meta_table("tb_mig_run_log") + " (dag_nm, dag_run_id, mpg_id, task_nm, wrk_dvsn_cd, load_mthd_cd, wrk_sts_cd, src_row_cnt, tgt_row_cnt, s3_byte_size, s3_mnf_path, sql_file_path, src_where_cnd, wrk_stt_dtm, wrk_end_dtm, wrk_elps_sec, wrk_msg) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)", parameters=(DAG_ID, record["dag_run_id"], record.get("mpg_id"), step.lower(), step, record.get("load_sts_cd"), status, record.get("src_row_cnt"), record.get("tgt_row_cnt"), record.get("s3_byte_size"), record.get("s3_mnf_path"), record.get("sql_file_path"), record.get("src_where_cnd"), now, now if status in {{"SUCCESS", "FAILED"}} else None, record.get("wrk_elps_sec"), message))
 
+def write_emr_run(record: dict[str, Any], status: str, message: str) -> None:
+    profile = emr_profile()
+    if not profile:
+        return
+    now = datetime.now()
+    metadata_hook().run("INSERT INTO " + meta_table("tb_mig_emr_run") + " (dag_nm, dag_run_id, emr_id, emr_cluster_id, emr_sts_cd, force_term_yn, wrk_stt_dtm, wrk_end_dtm, wrk_msg) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)", parameters=(DAG_ID, record["dag_run_id"], profile["emr_id"], profile.get("emr_cluster_id"), status, status == "TERMINATING", now, now if status in {{"TERMINATED", "FAILED"}} else None, message))
+
 def execute(record: dict[str, Any], step: str, label: str) -> dict[str, Any]:
     write_log(record, step, "RUNNING", label + " 시작")
     try:
@@ -428,6 +449,23 @@ def migration_dag() -> None:
         return execute(record, "VALIDATE_S3_TGT", "S3 대상 검증")
 
     @task(trigger_rule=TriggerRule.ALL_DONE)
+    def terminate_emr(**context: Any) -> None:
+        profile = emr_profile()
+        if not profile or not bool(profile.get("auto_term_yn")):
+            return
+        record = {{"dag_nm": DAG_ID, "dag_run_id": context["dag_run"].run_id, "emr_id": profile["emr_id"], "emr_cluster_id": profile.get("emr_cluster_id")}}
+        write_log(record, "EMR_TERMINATE", "RUNNING", "전용 EMR 종료 시작")
+        write_emr_run(record, "TERMINATING", "전용 EMR 종료 요청")
+        try:
+            terminate_profile(profile)
+        except Exception as error:
+            write_log(record, "EMR_TERMINATE", "FAILED", str(error))
+            write_emr_run(record, "FAILED", str(error))
+            raise
+        write_log(record, "EMR_TERMINATE", "SUCCESS", "전용 EMR 종료 요청 완료")
+        write_emr_run(record, "TERMINATED", "전용 EMR 종료 요청 완료")
+
+    @task(trigger_rule=TriggerRule.ALL_DONE)
     def finalize(**context: Any) -> None:
         instances = context["dag_run"].get_task_instances()
         failed = [item.task_id for item in instances if str(item.state).upper().endswith("FAILED")]
@@ -440,6 +478,9 @@ def migration_dag() -> None:
     {steps}
     finalize_task = finalize()
     finalize_task.set_upstream(final_result)
+    if EMR_ID:
+        terminate_task = terminate_emr()
+        terminate_task.set_upstream(finalize_task)
 
 migration_dag()
 '''
@@ -450,10 +491,11 @@ def area_dag_sources(area: str, settings: dict[str, object]) -> dict[str, str]:
     code = subject_code(area)
     s3_parallel = int(settings.get("s3_maximum", 1) or 1)
     ins_parallel = int(settings.get("ins_maximum", 1) or 1)
+    emr_id = text(settings.get("emr_id")).upper() or None
     return {
         dag_id(code, "FULL_SRC_S3"): generated_source(dag_id(code, "FULL_SRC_S3"), "FULL_SRC_S3", code, None, s3_parallel, None, ["mig", code.lower(), "full", "src_s3"]),
         dag_id(code, "FULL_S3_TGT"): generated_source(dag_id(code, "FULL_S3_TGT"), "FULL_S3_TGT", code, None, ins_parallel, None, ["mig", code.lower(), "full", "s3_tgt"]),
-        dag_id(code, "FULL_ALL"): generated_source(dag_id(code, "FULL_ALL"), "FULL_ALL", code, None, s3_parallel, None, ["mig", code.lower(), "full", "integrated"]),
+        dag_id(code, "FULL_ALL"): generated_source(dag_id(code, "FULL_ALL"), "FULL_ALL", code, None, s3_parallel, None, ["mig", code.lower(), "full", "integrated"], emr_id),
         dag_id(code, "VALD_SRC_S3"): generated_source(dag_id(code, "VALD_SRC_S3"), "VALD_SRC_S3", code, None, s3_parallel, None, ["mig", code.lower(), "validation", "src_s3"]),
         dag_id(code, "VALD_S3_TGT"): generated_source(dag_id(code, "VALD_S3_TGT"), "VALD_S3_TGT", code, None, ins_parallel, None, ["mig", code.lower(), "validation", "s3_tgt"]),
     }
@@ -466,10 +508,11 @@ def table_dag_sources(row: dict[str, Any], settings: dict[str, object], purpose:
     schedule = SCHEDULES.get(text(settings.get("incr_schedule", "NONE")).upper()) if purpose == "INCR" else None
     s3_parallel = int(settings.get("s3_maximum", 1) or 1)
     ins_parallel = int(settings.get("ins_maximum", 1) or 1)
+    emr_id = text(settings.get("emr_id")).upper() or None
     return {
         dag_id(area, f"{prefix}_SRC_S3", map_id): generated_source(dag_id(area, f"{prefix}_SRC_S3", map_id), f"{prefix}_SRC_S3", area, map_id, s3_parallel, schedule, ["mig", area.lower(), str(map_id), prefix.lower(), "src_s3"]),
         dag_id(area, f"{prefix}_S3_TGT", map_id): generated_source(dag_id(area, f"{prefix}_S3_TGT", map_id), f"{prefix}_S3_TGT", area, map_id, ins_parallel, None, ["mig", area.lower(), str(map_id), prefix.lower(), "s3_tgt"]),
-        dag_id(area, f"{prefix}_ALL", map_id): generated_source(dag_id(area, f"{prefix}_ALL", map_id), f"{prefix}_ALL", area, map_id, s3_parallel, schedule, ["mig", area.lower(), str(map_id), prefix.lower(), "integrated"]),
+        dag_id(area, f"{prefix}_ALL", map_id): generated_source(dag_id(area, f"{prefix}_ALL", map_id), f"{prefix}_ALL", area, map_id, s3_parallel, schedule, ["mig", area.lower(), str(map_id), prefix.lower(), "integrated"], emr_id),
     }
 
 
@@ -489,7 +532,9 @@ def setting_rows(areas: pd.DataFrame, values: dict[str, Any], schema_name: str, 
                        MAX(CASE WHEN D.dag_dvsn_cd = 'FULL_SRC_S3' THEN D.max_parl_cnt END) AS s3_maximum,
                        MAX(CASE WHEN D.dag_dvsn_cd = 'FULL_S3_TGT' THEN D.dflt_parl_cnt END) AS ins_default,
                        MAX(CASE WHEN D.dag_dvsn_cd = 'FULL_S3_TGT' THEN D.max_parl_cnt END) AS ins_maximum,
-                       MAX(CASE WHEN D.dag_dvsn_cd = 'INCR_SRC_S3' THEN D.schd_cd END) AS incr_schedule
+                       MAX(CASE WHEN D.dag_dvsn_cd = 'INCR_SRC_S3' THEN D.schd_cd END) AS incr_schedule,
+                       MAX(D.airflow_id) AS airflow_id,
+                       MAX(D.emr_id) AS emr_id
                   FROM {qualified(schema_name, 'tb_mig_sbj_area')} A
                   LEFT JOIN {qualified(schema_name, 'tb_mig_sbj_dag_mpg')} D ON D.sbj_area_cd = A.sbj_area_cd AND D.active_yn = TRUE
                  WHERE A.active_yn = TRUE
@@ -515,7 +560,7 @@ def save_settings(values: dict[str, Any], schema_name: str, connect: Callable[..
         with connection.cursor() as cursor:
             for kind, default_parallel, maximum_parallel, schedule_code in records:
                 cursor.execute(f"DELETE FROM {qualified(schema_name, 'tb_mig_sbj_dag_mpg')} WHERE sbj_area_cd = %s AND dag_dvsn_cd = %s", (area, kind))
-                cursor.execute(f"INSERT INTO {qualified(schema_name, 'tb_mig_sbj_dag_mpg')} (sbj_area_cd, dag_dvsn_cd, dflt_parl_cnt, max_parl_cnt, schd_cd, active_yn) VALUES (%s, %s, %s, %s, %s, TRUE)", (area, kind, int(default_parallel), int(maximum_parallel), schedule_code))
+                cursor.execute(f"INSERT INTO {qualified(schema_name, 'tb_mig_sbj_dag_mpg')} (sbj_area_cd, dag_dvsn_cd, airflow_id, emr_id, dflt_parl_cnt, max_parl_cnt, schd_cd, active_yn) VALUES (%s, %s, %s, %s, %s, %s, %s, TRUE)", (area, kind, text(settings.get('airflow_id')).upper() or None, text(settings.get('emr_id')).upper() or None, int(default_parallel), int(maximum_parallel), schedule_code))
         connection.commit()
 
 
@@ -533,9 +578,15 @@ def render_dag_generator(areas: pd.DataFrame, maps: pd.DataFrame, values: dict[s
     try:
         settings_frame = setting_rows(areas, values, schema_name, query_frame, qualified)
         saved = settings_frame.loc[settings_frame.sbj_area_cd.eq(selected_area)].iloc[0]
+        airflows = airflow_frame(query_frame, values, schema_name, qualified, active_only=True)
+        emrs = emr_frame(query_frame, values, schema_name, qualified, active_only=True)
     except Exception as error:
         st.error(f"DAG 설정 조회 실패: {error}", icon=":material/error:")
         return
+    airflow_options = ["", *airflows.airflow_id.tolist()]
+    emr_options = ["", *emrs.emr_id.tolist()]
+    airflow_current = text(saved.get("airflow_id")).upper()
+    emr_current = text(saved.get("emr_id")).upper()
     with st.form("subject_dag_settings"):
         left, right = st.columns(2)
         with left:
@@ -546,8 +597,10 @@ def render_dag_generator(areas: pd.DataFrame, maps: pd.DataFrame, values: dict[s
             ins_maximum = st.number_input("대상 적재 최대 병렬", min_value=1, value=int(saved.ins_maximum))
         options = list(SCHEDULES)
         incr_schedule = st.selectbox("증분 S3 일정", options, index=options.index(text(saved.incr_schedule).upper()) if text(saved.incr_schedule).upper() in options else 0)
+        airflow_id = st.selectbox("Airflow", airflow_options, index=airflow_options.index(airflow_current) if airflow_current in airflow_options else 0, format_func=lambda value: "선택" if not value else f"{value} · {text(airflows.loc[airflows.airflow_id.eq(value)].iloc[0].airflow_nm)}")
+        emr_id = st.selectbox("EMR", emr_options, index=emr_options.index(emr_current) if emr_current in emr_options else 0, format_func=lambda value: "사용 안 함" if not value else f"{value} · {text(emrs.loc[emrs.emr_id.eq(value)].iloc[0].emr_nm)}")
         saved_clicked = st.form_submit_button("DAG 설정 저장", type="primary", icon=":material/save:")
-    settings = {"s3_default": s3_default, "s3_maximum": s3_maximum, "ins_default": ins_default, "ins_maximum": ins_maximum, "incr_schedule": incr_schedule}
+    settings = {"s3_default": s3_default, "s3_maximum": s3_maximum, "ins_default": ins_default, "ins_maximum": ins_maximum, "incr_schedule": incr_schedule, "airflow_id": airflow_id, "emr_id": emr_id}
     if saved_clicked:
         try:
             save_settings(values, schema_name, connect, qualified, selected_area, settings)
@@ -578,7 +631,24 @@ def render_dag_generator(areas: pd.DataFrame, maps: pd.DataFrame, values: dict[s
         return
     selected_name = st.selectbox("DAG 미리보기", list(sources))
     st.code(sources[selected_name], language="python")
-    if st.button("DAG 파일 생성", type="primary", icon=":material/terminal:"):
-        paths = save_dag_files(sources)
-        st.success("생성 완료: " + ", ".join(path.name for path in paths), icon=":material/check_circle:")
+    if st.button("DAG 저장·Airflow 배포", type="primary", icon=":material/cloud_upload:"):
+        if not airflow_id:
+            st.error("DAG 자동 배포를 위해 Airflow를 선택하십시오.", icon=":material/error:")
+            return
+        profile_rows = airflows.loc[airflows.airflow_id.eq(airflow_id)]
+        if profile_rows.empty:
+            st.error("사용 중인 Airflow 정보를 찾을 수 없습니다.", icon=":material/error:")
+            return
+        profile = profile_rows.iloc[0].to_dict()
+        local_paths = save_dag_files(sources)
+        try:
+            deployed_paths = deploy_sources(profile, sources)
+            save_deploy_history(values, schema_name, qualified, airflow_id, profile["dply_mthd_cd"], sources, deployed_paths, "SUCCESS", "Airflow 비활성 등록 완료")
+            st.success("생성·배포·Airflow 비활성 등록 완료: " + ", ".join(path.name for path in local_paths), icon=":material/check_circle:")
+        except Exception as error:
+            try:
+                save_deploy_history(values, schema_name, qualified, airflow_id, profile["dply_mthd_cd"], sources, None, "FAILED", str(error))
+            except Exception:
+                pass
+            st.error(f"DAG 배포 실패: {error}", icon=":material/error:")
     st.download_button("선택 DAG 다운로드", data=sources[selected_name], file_name=f"{selected_name}.py", mime="text/x-python", icon=":material/download:")

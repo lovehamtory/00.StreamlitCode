@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import sys
+import tempfile
 import types
 import unittest
+from datetime import datetime
 from io import BytesIO
 from pathlib import Path
 from unittest.mock import patch
@@ -17,12 +19,14 @@ sys.path.insert(0, str(PROJECT_ROOT / "app"))
 sys.path.insert(0, str(PROJECT_ROOT / "dag"))
 
 import SrcTgtArtifact as artifact
+import SrcTgtAirflow as airflow
 import SrcTgtDagGenerator as dag_generator
 import SrcTgtDataType as data_type
 import SrcTgtLoadState as load_state
 import SrcTgtMapping as mapping
 import SrcTgtSetup as setup
 import SrcTgtTargetReflection as target_reflection
+from common.mig_emr_runtime import terminate_profile
 from common.mig_step_runtime import execute_logged_step
 
 
@@ -32,7 +36,7 @@ class VirtualWorkflowTest(unittest.TestCase):
         subject_block = ddl.split("CREATE TABLE MIG_META.TB_MIG_SBJ_AREA", 1)[1].split("CREATE TABLE MIG_META.TB_MIG_SBJ_DAG_MPG", 1)[0]
         table_block = ddl.split("CREATE TABLE MIG_META.TB_MIG_TBL_MPG", 1)[1].split("CREATE TABLE MIG_META.TB_MIG_COL_MPG", 1)[0]
         column_block = ddl.split("CREATE TABLE MIG_META.TB_MIG_COL_MPG", 1)[1].split("CREATE TABLE MIG_META.TB_MIG_MPG_CHG_HIST", 1)[0]
-        for name in ("TB_MIG_CONN", "TB_MIG_SBJ_AREA", "TB_MIG_SBJ_DAG_MPG", "TB_MIG_SRC_LAYOUT", "TB_MIG_TBL_MPG", "TB_MIG_COL_MPG", "TB_MIG_MPG_CHG_HIST", "TB_MIG_S3_MANF", "TB_MIG_DAG_RUN", "TB_MIG_RUN_LOG", "TB_MIG_VALD_RSLT", "TB_MIG_VALD_COL_RSLT", "TB_MIG_TBL_LOAD_HIST", "TB_MIG_ARTF_ITEM"):
+        for name in ("TB_MIG_CONN", "TB_MIG_AIRFLOW", "TB_MIG_EMR", "TB_MIG_SBJ_AREA", "TB_MIG_SBJ_DAG_MPG", "TB_MIG_DAG_DPLY_HIST", "TB_MIG_EMR_RUN", "TB_MIG_SRC_LAYOUT", "TB_MIG_TBL_MPG", "TB_MIG_COL_MPG", "TB_MIG_MPG_CHG_HIST", "TB_MIG_S3_MANF", "TB_MIG_DAG_RUN", "TB_MIG_RUN_LOG", "TB_MIG_VALD_RSLT", "TB_MIG_VALD_COL_RSLT", "TB_MIG_TBL_LOAD_HIST", "TB_MIG_ARTF_ITEM"):
             self.assertIn(name, ddl)
         self.assertNotIn("CREATE TABLE MIG_META.TB_MIG_SBJ_DEP", ddl)
         self.assertNotIn("CREATE TABLE MIG_META.TB_MIG_TBL_DEP", ddl)
@@ -59,6 +63,8 @@ class VirtualWorkflowTest(unittest.TestCase):
         self.assertNotIn("TGT_CONN_ID", table_block)
         self.assertLess(column_block.index("TGT_COL_NM"), column_block.index("SRC_COL_NM"))
         self.assertLess(column_block.index("COL_MPG_MTHD_CD"), column_block.index("SRC_COL_NM"))
+        self.assertIn("AIRFLOW_ID", ddl)
+        self.assertIn("EMR_ID", ddl)
 
     def test_redshift_ddl_static_parse(self) -> None:
         source = (PROJECT_ROOT / "sql" / "01_mig_metadata_ddl.sql").read_text(encoding="utf-8")
@@ -67,6 +73,8 @@ class VirtualWorkflowTest(unittest.TestCase):
 
     def test_initial_setup_contract(self) -> None:
         self.assertIn("tb_mig_dag_run", setup.REQUIRED_TABLES)
+        self.assertIn("tb_mig_airflow", setup.REQUIRED_TABLES)
+        self.assertIn("tb_mig_emr", setup.REQUIRED_TABLES)
         self.assertIn("tb_mig_src_layout", setup.REQUIRED_TABLES)
         self.assertNotIn("tb_mig_sbj_dep", setup.REQUIRED_TABLES)
         self.assertEqual(setup.schema_name("migration_meta"), "migration_meta")
@@ -139,6 +147,38 @@ class VirtualWorkflowTest(unittest.TestCase):
         self.assertIn("src_extract_sql", table_sources["mig_a010001_101_incr_src_s3"])
         self.assertIn("source_target_increment_columns", table_sources["mig_a010001_101_incr_all"])
         self.assertNotIn("MERGE INTO", table_sources["mig_a010001_101_incr_s3_tgt"])
+        emr_sources = dag_generator.area_dag_sources("A010001", settings | {"emr_id": "EMR_LOAD"})
+        self.assertIn("EMR_ID = 'EMR_LOAD'", emr_sources["mig_a010001_full_all"])
+        self.assertIn("terminate_emr", emr_sources["mig_a010001_full_all"])
+        self.assertIn("EMR_ID = None", emr_sources["mig_a010001_full_src_s3"])
+
+    def test_airflow_deployment_and_emr_contract(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            paths = airflow.write_shared_sources({"dag_deploy_root": directory}, {"mig_test": "value = 1\n"})
+            self.assertEqual(len(paths), 1)
+            self.assertEqual(Path(paths[0]).read_text(encoding="utf-8"), "value = 1\n")
+        with self.assertRaises(ValueError):
+            airflow.safe_dag_name("../unsafe")
+        dedicated = {"emr_id": "EMR1", "emr_type_cd": "EMR_EC2", "aws_conn_id": "aws_default", "emr_cluster_id": "j-123", "dedicated_yn": True, "auto_term_yn": True}
+        client_calls: list[dict[str, object]] = []
+
+        class FakeHook:
+            def __init__(self, aws_conn_id: str):
+                self.aws_conn_id = aws_conn_id
+
+            def get_client_type(self, value: str):
+                return type("Client", (), {"terminate_job_flows": lambda _, **kwargs: client_calls.append(kwargs)})()
+
+        amazon_module = types.ModuleType("airflow.providers.amazon")
+        aws_module = types.ModuleType("airflow.providers.amazon.aws")
+        hooks_module = types.ModuleType("airflow.providers.amazon.aws.hooks")
+        base_module = types.ModuleType("airflow.providers.amazon.aws.hooks.base_aws")
+        base_module.AwsBaseHook = FakeHook
+        with patch.dict(sys.modules, {"airflow.providers.amazon": amazon_module, "airflow.providers.amazon.aws": aws_module, "airflow.providers.amazon.aws.hooks": hooks_module, "airflow.providers.amazon.aws.hooks.base_aws": base_module}):
+            terminate_profile(dedicated)
+        self.assertEqual(client_calls, [{"JobFlowIds": ["j-123"]}])
+        with self.assertRaises(ValueError):
+            airflow.deployment_root({"dag_deploy_root": "C:\\"})
 
     def test_source_and_target_sql_contract(self) -> None:
         settings = {"s3_default": 2, "s3_maximum": 4, "ins_default": 1, "ins_maximum": 1, "incr_schedule": "DLY_0200"}
@@ -227,7 +267,7 @@ class VirtualWorkflowTest(unittest.TestCase):
         self.assertIn('(S."CUST_NO", S."RSN_CD") IN (SELECT (I."CUST_NO", I."RSN_CD")', source_plan["src_extract_sql"])
         self.assertNotIn("CUSTOMER_REASON", source_plan["src_extract_sql"])
         self.assertNotIn('DIM_CUSTOMER', source_plan["src_extract_sql"])
-        self.assertEqual(source_plan["s3_load_path"], "s3://migration-stage/incr/dwh__dim_customer/wrk_dt=20260827/run_id=manual__2026-08-27T00_00_00_00_00")
+        self.assertEqual(source_plan["s3_load_path"], f"s3://migration-stage/incr/dwh__dim_customer/wrk_dt={datetime.now().strftime('%Y%m%d')}/run_id=manual__2026-08-27T00_00_00_00_00")
         self.assertEqual(source_plan["s3_retention_days"], 31)
         full_s3_plan = namespace["source_extract_plan"](dict(record) | {"load_sts_cd": "FULL"}, {"wrk_dt": "20260827"})
         self.assertEqual(full_s3_plan["s3_load_path"], "s3://migration-stage/full/dwh__dim_customer")
@@ -293,7 +333,8 @@ class VirtualWorkflowTest(unittest.TestCase):
     def test_screen_structure_contract(self) -> None:
         control = (PROJECT_ROOT / "app" / "SrcTgtControl.py").read_text(encoding="utf-8")
         orchestration = (PROJECT_ROOT / "app" / "SrcTgtOrchestrator.py").read_text(encoding="utf-8")
-        self.assertIn('"🔌 접속정보", "🗂️ 주제영역", "🔗 SRC·TGT 매핑", "⚙️ DAG 생성", "✅ 검증", "📋 실행 이력", "📦 산출물"', control)
+        self.assertIn('"☁️ Airflow", "🖥️ EMR"', control)
+        self.assertIn('default=None', control)
         self.assertNotIn("프로젝트 오케스트레이터", control)
         self.assertIn('title="초기 설정"', orchestration)
         self.assertIn('title="실행 현황"', orchestration)

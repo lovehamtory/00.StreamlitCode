@@ -7,8 +7,10 @@ import pandas as pd
 import streamlit as st
 
 from SrcTgtArtifact import render_artifacts
+from SrcTgtAirflow import render_airflow_management
 from SrcTgtConnection import connection_frame, connection_label, render_connection_management, validate_mapping_connections
 from SrcTgtDagGenerator import render_dag_generator
+from SrcTgtEmr import render_emr_management
 from SrcTgtMapping import render_mapping_workspace
 from SrcTgtRuntime import connect, qualified, query_frame, runtime_context, text
 from SrcTgtValidation import render_validation
@@ -119,8 +121,12 @@ def run_logs(values: dict[str, Any], schema_name: str) -> pd.DataFrame:
 
 
 st.title("🧭 이관 관리")
-views = ["🔌 접속정보", "🗂️ 주제영역", "🔗 SRC·TGT 매핑", "⚙️ DAG 생성", "✅ 검증", "📋 실행 이력", "📦 산출물"]
-view = st.segmented_control("업무", views, default=views[0], label_visibility="collapsed")
+views = ["🔌 접속정보", "☁️ Airflow", "🖥️ EMR", "🗂️ 주제영역", "🔗 SRC·TGT 매핑", "⚙️ DAG 생성", "✅ 검증", "📋 실행 이력", "📦 산출물"]
+view = st.segmented_control("업무", views, default=None, label_visibility="collapsed")
+
+if not view:
+    st.info("업무를 선택하십시오.", icon=":material/touch_app:")
+    st.stop()
 
 try:
     context = runtime_context()
@@ -128,20 +134,24 @@ except Exception:
     st.info("초기 설정 메뉴에서 메타 연결과 스키마를 준비한 뒤 다시 선택하십시오.", icon=":material/settings:")
     st.stop()
 
-try:
-    maps = table_maps(context.values, context.schema_name)
-except Exception as error:
-    st.error(f"메타데이터 조회 실패: {error}", icon=":material/error:")
-    st.stop()
-
 if view == "🔌 접속정보":
     render_connection_management(context.values, context.schema_name, query_frame, connect, qualified)
+elif view == "☁️ Airflow":
+    render_airflow_management(context.values, context.schema_name, query_frame, qualified)
+elif view == "🖥️ EMR":
+    render_emr_management(context.values, context.schema_name, query_frame, qualified)
 elif view == "🗂️ 주제영역":
     render_subject_area(context.values, context.schema_name)
 elif view == "🔗 SRC·TGT 매핑":
-    render_mapping_workspace(maps, context.values, context.schema_name, query_frame, connect, qualified)
+    try:
+        render_mapping_workspace(table_maps(context.values, context.schema_name), context.values, context.schema_name, query_frame, connect, qualified)
+    except Exception as error:
+        st.error(f"매핑 조회 실패: {error}", icon=":material/error:")
 elif view == "⚙️ DAG 생성":
-    render_dag_generator(subject_areas(context.values, context.schema_name), maps, context.values, context.schema_name, query_frame, connect, qualified)
+    try:
+        render_dag_generator(subject_areas(context.values, context.schema_name), table_maps(context.values, context.schema_name), context.values, context.schema_name, query_frame, connect, qualified)
+    except Exception as error:
+        st.error(f"DAG 정보 조회 실패: {error}", icon=":material/error:")
 elif view == "✅ 검증":
     render_validation(context.values, context.schema_name, query_frame, qualified)
 elif view == "📋 실행 이력":
