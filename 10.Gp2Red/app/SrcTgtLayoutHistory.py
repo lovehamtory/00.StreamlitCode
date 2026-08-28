@@ -89,7 +89,9 @@ try:
     sources = sources.loc[sources.dbms_cd.map(text).str.upper().eq("GREENPLUM")]
     if sources.empty:
         raise ValueError("Greenplum 원천 접속정보를 등록하십시오.")
-    connection_id = st.selectbox("원천 접속", sources.conn_id.tolist(), format_func=lambda item: connection_label(sources, item))
+    connection_options = sources.conn_id.tolist()
+    requested_connection = text(st.query_params.get("src_conn_id")).upper()
+    connection_id = st.selectbox("원천 접속", connection_options, index=connection_options.index(requested_connection) if requested_connection in connection_options else 0, format_func=lambda item: connection_label(sources, item))
 except Exception as error:
     st.error(f"원천 접속 조회 실패: {error}", icon=":material/error:")
     st.stop()
@@ -97,7 +99,10 @@ except Exception as error:
 try:
     captured = captured_tables(context.values, context.schema_name, connection_id)
     if not captured.empty:
-        selected_key = st.selectbox("수집 테이블", captured.index.tolist(), format_func=lambda index: f"{captured.loc[index].src_sch_nm}.{captured.loc[index].src_tbl_nm} · {int(captured.loc[index].src_col_cnt):,} 컬럼")
+        table_options = captured.index.tolist()
+        requested_table = (text(st.query_params.get("src_sch_nm")), text(st.query_params.get("src_tbl_nm")))
+        table_index = next((index for index in table_options if (text(captured.loc[index].src_sch_nm), text(captured.loc[index].src_tbl_nm)) == requested_table), table_options[0])
+        selected_key = st.selectbox("수집 테이블", table_options, index=table_options.index(table_index), format_func=lambda index: f"{captured.loc[index].src_sch_nm}.{captured.loc[index].src_tbl_nm} · {int(captured.loc[index].src_col_cnt):,} 컬럼")
         selected_table = captured.loc[selected_key]
         mapped = mapped_tables(context.values, context.schema_name, connection_id, text(selected_table.src_sch_nm), text(selected_table.src_tbl_nm))
         if mapped.empty:

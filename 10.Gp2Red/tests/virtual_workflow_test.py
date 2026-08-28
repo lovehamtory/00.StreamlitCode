@@ -353,10 +353,12 @@ class VirtualWorkflowTest(unittest.TestCase):
         self.assertIn("restore_sql_history", mapping_source)
         self.assertIn("before_value", mapping_source)
         self.assertIn('st.switch_page("SrcTgtTargetDdl.py"', mapping_source)
+        self.assertIn('st.switch_page("SrcTgtLayoutHistory.py"', mapping_source)
         layout_source = (PROJECT_ROOT / "app" / "SrcTgtLayoutHistory.py").read_text(encoding="utf-8")
         self.assertIn("def captured_tables", layout_source)
         self.assertIn('"src_conn_id": connection_id', layout_source)
         self.assertIn('st.switch_page("SrcTgtControl.py"', layout_source)
+        self.assertIn('"src_sch_nm"', layout_source)
 
 
 if __name__ == "__main__":

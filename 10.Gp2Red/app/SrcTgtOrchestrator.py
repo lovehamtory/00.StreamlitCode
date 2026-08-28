@@ -15,13 +15,13 @@ page = st.navigation(
         ],
         "이관관리": [
             st.Page(ROOT / "SrcTgtLayoutHistory.py", title="테이블 레이아웃", icon=":material/table_chart:"),
-            st.Page(ROOT / "SrcTgtLayoutCompare.py", title="테이블 변경 비교", icon=":material/difference:"),
             st.Page(ROOT / "SrcTgtTargetDdl.py", title="대상 DDL", icon=":material/data_object:"),
             st.Page(ROOT / "SrcTgtControl.py", title="SRC·TGT 매핑", icon=":material/link:"),
             st.Page(ROOT / "SrcTgtDagManagement.py", title="DAG 생성", icon=":material/account_tree:"),
         ],
         "운영": [
             st.Page(ROOT / "SrcTgtMonitor.py", title="실행 현황", icon=":material/monitoring:"),
+            st.Page(ROOT / "SrcTgtLayoutCompare.py", title="테이블 변경 비교", icon=":material/difference:"),
             st.Page(ROOT / "SrcTgtValidationManagement.py", title="검증", icon=":material/fact_check:"),
             st.Page(ROOT / "SrcTgtRunHistory.py", title="실행 이력", icon=":material/history:"),
             st.Page(ROOT / "SrcTgtEmrManagement.py", title="EMR", icon=":material/computer:"),

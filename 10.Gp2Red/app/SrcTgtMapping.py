@@ -424,11 +424,13 @@ def render_single(maps: pd.DataFrame, values: dict[str, Any], schema_name: str, 
     selected = st.selectbox("테이블매핑", options, index=selected_index, format_func=lambda value: "신규 테이블매핑" if value == "신규" else f"{value} · {maps.loc[maps.mpg_id.eq(value)].iloc[0].src_sch_nm}.{maps.loc[maps.mpg_id.eq(value)].iloc[0].src_tbl_nm} → {maps.loc[maps.mpg_id.eq(value)].iloc[0].tgt_sch_nm}.{maps.loc[maps.mpg_id.eq(value)].iloc[0].tgt_tbl_nm}")
     current = None if selected == "신규" else maps.loc[maps.mpg_id.eq(selected)].iloc[0]
     if current is not None:
-        links = st.columns(2)
+        links = st.columns(3)
         if links[0].button("대상 DDL 수정", icon=":material/data_object:", key=f"mapping_ddl_{selected}"):
             st.switch_page("SrcTgtTargetDdl.py", query_params={"mpg_id": str(int(selected))})
         if links[1].button("DAG 생성", icon=":material/account_tree:", key=f"mapping_dag_{selected}"):
             st.switch_page("SrcTgtDagManagement.py", query_params={"sbj_area_cd": text(current.sbj_area_cd), "mpg_id": str(int(selected))})
+        if links[2].button("원천 테이블", icon=":material/table_chart:", key=f"mapping_source_{selected}"):
+            st.switch_page("SrcTgtLayoutHistory.py", query_params={"src_conn_id": text(current.src_conn_id), "src_sch_nm": text(current.src_sch_nm), "src_tbl_nm": text(current.src_tbl_nm)})
     try:
         connections = connection_frame(query_frame, values, schema_name, qualified, active_only=True)
         areas = subject_connections(query_frame, values, schema_name, qualified)
