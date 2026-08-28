@@ -39,6 +39,7 @@ page = st.navigation(
 )
 
 with st.sidebar:
-    st.caption("⚙️ Created by ♡홍율파파♡", text_alignment="right")
+    st.space("medium")
+    st.caption("⚙️ Created by ♡홍율파파♡", text_alignment="center")
 
 page.run()

@@ -52,9 +52,30 @@ def save_layout(context_values: dict[str, Any], schema_name: str, layout: pd.Dat
     return len(layout)
 
 
+def captured_tables(values: dict[str, Any], schema_name: str, connection_id: str) -> pd.DataFrame:
+    table_name = qualified(schema_name, "tb_mig_src_layout")
+    query = f'''SELECT std_dt, src_sch_nm, src_tbl_nm, MAX(src_tbl_cmt) AS src_tbl_cmt, COUNT(*) AS src_col_cnt
+                  FROM {table_name}
+                 WHERE src_conn_id = %s
+                   AND std_dt = (SELECT MAX(std_dt) FROM {table_name} WHERE src_conn_id = %s)
+                 GROUP BY std_dt, src_sch_nm, src_tbl_nm
+                 ORDER BY src_sch_nm, src_tbl_nm'''
+    return query_frame(values, query, (connection_id, connection_id))
+
+
+def mapped_tables(values: dict[str, Any], schema_name: str, connection_id: str, source_schema: str, source_table: str) -> pd.DataFrame:
+    query = f'''SELECT T.mpg_id, T.sbj_area_cd, T.tgt_sch_nm, T.tgt_tbl_nm
+                  FROM {qualified(schema_name, 'tb_mig_tbl_mpg')} T
+                  JOIN {qualified(schema_name, 'tb_mig_sbj_area')} A ON A.sbj_area_cd = T.sbj_area_cd
+                 WHERE T.active_yn = TRUE
+                   AND A.src_conn_id = %s
+                   AND T.src_sch_nm = %s
+                   AND T.src_tbl_nm = %s
+                 ORDER BY T.mpg_id'''
+    return query_frame(values, query, (connection_id, source_schema, source_table))
+
+
 st.subheader(":material/table_chart: 테이블 레이아웃")
-if st.button("SRC·TGT 매핑", icon=":material/link:"):
-    st.switch_page("SrcTgtControl.py")
 
 try:
     context = runtime_context()
@@ -72,6 +93,22 @@ try:
 except Exception as error:
     st.error(f"원천 접속 조회 실패: {error}", icon=":material/error:")
     st.stop()
+
+try:
+    captured = captured_tables(context.values, context.schema_name, connection_id)
+    if not captured.empty:
+        selected_key = st.selectbox("수집 테이블", captured.index.tolist(), format_func=lambda index: f"{captured.loc[index].src_sch_nm}.{captured.loc[index].src_tbl_nm} · {int(captured.loc[index].src_col_cnt):,} 컬럼")
+        selected_table = captured.loc[selected_key]
+        mapped = mapped_tables(context.values, context.schema_name, connection_id, text(selected_table.src_sch_nm), text(selected_table.src_tbl_nm))
+        if mapped.empty:
+            if st.button("매핑 신규", icon=":material/link_add:"):
+                st.switch_page("SrcTgtControl.py", query_params={"src_conn_id": connection_id, "src_std_dt": text(selected_table.std_dt), "src_sch_nm": text(selected_table.src_sch_nm), "src_tbl_nm": text(selected_table.src_tbl_nm)})
+        else:
+            mapping_id = st.selectbox("테이블 매핑", mapped.mpg_id.tolist(), format_func=lambda value: f"{value} · {mapped.loc[mapped.mpg_id.eq(value)].iloc[0].tgt_sch_nm}.{mapped.loc[mapped.mpg_id.eq(value)].iloc[0].tgt_tbl_nm}")
+            if st.button("매핑 수정", icon=":material/edit:"):
+                st.switch_page("SrcTgtControl.py", query_params={"mpg_id": str(int(mapping_id))})
+except Exception as error:
+    st.error(f"수집 테이블 조회 실패: {error}", icon=":material/error:")
 
 try:
     source_values = runtime_connection_values(sources, connection_id)

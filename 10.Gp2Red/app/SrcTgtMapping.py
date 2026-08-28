@@ -458,7 +458,9 @@ def render_single(maps: pd.DataFrame, values: dict[str, Any], schema_name: str, 
             if snapshots.empty:
                 raise ValueError("사용 중인 원천 접속정보의 레이아웃 적재 이력이 없습니다. 먼저 원천 레이아웃에서 기준일을 적재하십시오.")
             snapshot_options = snapshots[["SRC_CONN_ID", "STD_DT", "OWNER", "TBL"]].astype(str).agg(" | ".join, axis=1).tolist()
-            selected_snapshot = st.selectbox("원천 레이아웃", snapshot_options, key="new_mapping_source")
+            requested_snapshot = (text(st.query_params.get("src_conn_id")).upper(), text(st.query_params.get("src_std_dt")), text(st.query_params.get("src_sch_nm")), text(st.query_params.get("src_tbl_nm")))
+            snapshot_index = next((index for index, row in snapshots.reset_index(drop=True).iterrows() if (text(row.SRC_CONN_ID).upper(), text(row.STD_DT), text(row.OWNER), text(row.TBL)) == requested_snapshot), 0)
+            selected_snapshot = st.selectbox("원천 레이아웃", snapshot_options, index=snapshot_index, key="new_mapping_source")
             source_snapshot = snapshots.iloc[snapshot_options.index(selected_snapshot)]
             source_connection = source_connections.loc[source_connections.conn_id.map(text).str.upper().eq(text(source_snapshot.SRC_CONN_ID).upper())].iloc[0]
             character_multiple = int(source_connection.get("char_len_mul", 3) or 3)
