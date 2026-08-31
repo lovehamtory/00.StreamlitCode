@@ -477,7 +477,7 @@ def fetch_table_catalog_metrics(target_tables: tuple[str, ...]) -> pd.DataFrame:
                             "할당 크기": size_label(allocated_bytes),
                         }
                     )
-    return pd.DataFrame(rows)
+    return pd.DataFrame(rows, columns=["대상 Oracle 테이블", "NUM_ROWS", "INSERTS", "DELETES", "할당 크기"])
 
 
 def add_table_catalog_metrics(table_changes: pd.DataFrame) -> pd.DataFrame:
